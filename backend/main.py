@@ -430,7 +430,43 @@ def trigger_full_relinking(
     current_user: User = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
-    # Runs the re-linking script synchronously
+    # 1. On-the-fly heal/reprocess any mock captures for this user first
+    # This ensures that if they save their API key and click scan, the notes are re-processed immediately
+    from .ai_pipeline import get_user_api_key, call_gemini_embedding, call_gemini_analysis
+    
+    api_key = get_user_api_key(db, current_user.id)
+    if api_key:
+        mock_captures = db.query(Capture).filter(
+            Capture.user_id == current_user.id,
+            Capture.summary.like("[Mock AI Summary]%")
+        ).all()
+        
+        for cap in mock_captures:
+            try:
+                vector = call_gemini_embedding(cap.raw_text, api_key)
+                analysis = call_gemini_analysis(cap.raw_text, api_key)
+                
+                # Update Qdrant
+                qdrant_store.upsert_capture(
+                    capture_id=cap.id,
+                    user_id=current_user.id,
+                    vector=vector,
+                    category=analysis.get("category"),
+                    source=cap.source,
+                    created_at_ts=cap.created_at.timestamp()
+                )
+                
+                # Update DB
+                cap.category = analysis.get("category")
+                cap.sub_category = analysis.get("sub_category")
+                cap.summary = analysis.get("summary")
+                cap.tags = analysis.get("tags", [])
+                cap.ai_status = "completed"
+                db.commit()
+            except Exception as e:
+                print(f"Error healing capture {cap.id} during scan: {e}")
+                
+    # 2. Runs the re-linking script synchronously
     links_count = ai_pipeline.run_relinking_pass(user_id=current_user.id)
     if links_count == 0:
         return {"message": "Scan complete. No new semantic connections were found."}
