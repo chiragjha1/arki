@@ -491,7 +491,7 @@ def trigger_full_relinking(
         errors.append("No Gemini API key found in your account settings.")
                 
     # 2. Runs the re-linking script synchronously
-    links_count = ai_pipeline.run_relinking_pass(user_id=current_user.id)
+    links_count = ai_pipeline.run_relinking_pass(user_id=user_id)
     
     msg_parts = [f"Scan complete."]
     if healed_count > 0:
