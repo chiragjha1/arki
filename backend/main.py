@@ -640,6 +640,45 @@ def get_system_stats(request: Request, db: Session = Depends(get_db)):
         "qdrant_points_count": qdrant_points
     }
 
+@app.get("/api/admin/debug-qdrant")
+def get_debug_qdrant(request: Request):
+    x_debug_key = request.headers.get("x-debug-key")
+    if x_debug_key != "arki_debug_key_987654321_secret":
+        raise HTTPException(status_code=403, detail="Forbidden")
+        
+    import math
+    try:
+        points = qdrant_store.client.retrieve(
+            collection_name=qdrant_store.COLLECTION_NAME,
+            ids=[14, 20],
+            with_vectors=True
+        )
+        res = []
+        for p in points:
+            res.append({
+                "id": p.id,
+                "payload": p.payload,
+                "vector_len": len(p.vector) if p.vector else 0,
+                "has_vector": p.vector is not None
+            })
+            
+        similarity = None
+        if len(points) == 2 and points[0].vector and points[1].vector:
+            vec_a = points[0].vector
+            vec_b = points[1].vector
+            dot_product = sum(x * y for x, y in zip(vec_a, vec_b))
+            mag_a = math.sqrt(sum(x**2 for x in vec_a))
+            mag_b = math.sqrt(sum(x**2 for x in vec_b))
+            if mag_a > 0 and mag_b > 0:
+                similarity = dot_product / (mag_a * mag_b)
+            
+        return {
+            "points": res,
+            "cosine_similarity": similarity
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
 @app.get("/api/admin/debug-db")
 def get_debug_db(request: Request, db: Session = Depends(get_db)):
     x_debug_key = request.headers.get("x-debug-key")
