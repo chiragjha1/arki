@@ -298,6 +298,17 @@ def run_relinking_pass(user_id: int):
     """Runs a full re-linking pass over all user captures."""
     db = SessionLocal()
     try:
+        # First, prune any pre-existing duplicate links in the database to heal legacy duplicates
+        existing_links = db.query(Link).filter(Link.user_id == user_id).all()
+        seen_pairs = set()
+        for link in existing_links:
+            pair = (min(link.source_id, link.target_id), max(link.source_id, link.target_id))
+            if pair in seen_pairs:
+                db.delete(link)
+            else:
+                seen_pairs.add(pair)
+        db.commit()
+
         # Find all completed, non-deleted captures for the user
         captures = db.query(Capture).filter(
             Capture.user_id == user_id, 
@@ -308,6 +319,8 @@ def run_relinking_pass(user_id: int):
         api_key = get_user_api_key(db, user_id)
         
         links_proposed = 0
+        proposed_in_session = set()
+        
         for cap in captures:
             # Try to retrieve existing vector from Qdrant to avoid duplicate embedding API calls
             vector = None
@@ -331,12 +344,16 @@ def run_relinking_pass(user_id: int):
                 else:
                     vector = generate_mock_embedding(cap.raw_text)
 
-                
             # Perform similarity search
             results = qdrant_store.search_captures(user_id=user_id, query_vector=vector, limit=6)
             for res in results:
                 target_id = res["capture_id"]
                 if target_id == cap.id:
+                    continue
+                    
+                # Track unique connection pairs to prevent proposing bidirectional duplicates (A-B and B-A) in the same session
+                pair = (min(cap.id, target_id), max(cap.id, target_id))
+                if pair in proposed_in_session:
                     continue
                     
                 if res["score"] > 0.60:
@@ -354,6 +371,7 @@ def run_relinking_pass(user_id: int):
                             status="suggested"
                         )
                         db.add(new_link)
+                        proposed_in_session.add(pair)
                         links_proposed += 1
         db.commit()
         return links_proposed

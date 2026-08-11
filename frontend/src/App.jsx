@@ -1190,7 +1190,7 @@ export default function App() {
                   <div key={l.id} className="glass-panel" style={{ padding: "12px 14px", display: "flex", flexDirection: "column", gap: "8px", border: "1px dashed var(--accent-amber)" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem" }}>
                       <span style={{ color: "var(--accent-amber)", fontWeight: "700" }}>PROPOSED RELATION</span>
-                      <span style={{ color: "var(--text-muted)" }}>Similarity: {Math.round(l.score * 100)}%</span>
+                      <span style={{ color: "var(--text-muted)" }}>Similarity: {Math.round((l.similarity_score ?? l.score) * 100)}%</span>
                     </div>
 
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", fontSize: "0.8rem", color: "var(--text-secondary)" }}>
