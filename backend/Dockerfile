@@ -11,11 +11,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy backend files
-COPY . .
+# Copy backend files into a 'backend' subdirectory to preserve package import paths
+COPY . ./backend
 
-# Expose port (Railway standard target)
+# Expose port
 EXPOSE 8080
 
-# Run FastAPI app, fallback to 8080 if PORT environment variable is not set by host
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}"]
+# Run FastAPI app as a module, fallback to 8080 if PORT environment variable is not set by host
+CMD ["sh", "-c", "uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8080}"]
