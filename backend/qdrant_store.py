@@ -7,10 +7,17 @@ from dotenv import load_dotenv
 load_dotenv()
 
 QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
-QDRANT_PORT = int(os.getenv("QDRANT_PORT", 6333))
-COLLECTION_NAME = "captures"
+QDRANT_PORT_ENV = os.getenv("QDRANT_PORT")
+QDRANT_PORT = int(QDRANT_PORT_ENV) if QDRANT_PORT_ENV else None
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", None)
 
-client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+# Initialize QdrantClient. Handles local http/port and secure cloud https endpoints automatically.
+if QDRANT_HOST.startswith("http"):
+    client = QdrantClient(url=QDRANT_HOST, api_key=QDRANT_API_KEY)
+else:
+    client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT or 6333, api_key=QDRANT_API_KEY)
+
+COLLECTION_NAME = "captures"
 
 def init_qdrant():
     """Initializes the captures collection in Qdrant if it doesn't exist."""
