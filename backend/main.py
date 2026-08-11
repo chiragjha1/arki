@@ -434,6 +434,9 @@ def trigger_full_relinking(
     # This ensures that if they save their API key and click scan, the notes are re-processed immediately
     from .ai_pipeline import get_user_api_key, call_gemini_embedding, call_gemini_analysis
     
+    healed_count = 0
+    errors = []
+    
     api_key = get_user_api_key(db, current_user.id)
     if api_key:
         mock_captures = db.query(Capture).filter(
@@ -463,14 +466,29 @@ def trigger_full_relinking(
                 cap.tags = analysis.get("tags", [])
                 cap.ai_status = "completed"
                 db.commit()
+                healed_count += 1
             except Exception as e:
-                print(f"Error healing capture {cap.id} during scan: {e}")
+                err_msg = str(e)
+                print(f"Error healing capture {cap.id} during scan: {err_msg}")
+                errors.append(f"Note {cap.id} re-processing failed: {err_msg}")
+    else:
+        errors.append("No Gemini API key found in your account settings.")
                 
     # 2. Runs the re-linking script synchronously
     links_count = ai_pipeline.run_relinking_pass(user_id=current_user.id)
-    if links_count == 0:
-        return {"message": "Scan complete. No new semantic connections were found."}
-    return {"message": f"Scan complete. Proposed {links_count} new semantic connection(s)."}
+    
+    msg_parts = [f"Scan complete."]
+    if healed_count > 0:
+        msg_parts.append(f"Successfully re-processed {healed_count} fallback note(s) with live AI.")
+    if links_count > 0:
+        msg_parts.append(f"Proposed {links_count} new semantic connection(s).")
+    else:
+        msg_parts.append("No new semantic connections were found.")
+        
+    if errors:
+        msg_parts.append("Diagnostics: " + "; ".join(errors))
+        
+    return {"message": " ".join(msg_parts)}
 
 
 # ==========================================
