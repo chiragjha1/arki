@@ -27,7 +27,7 @@ def init_qdrant():
         exists = any(c.name == COLLECTION_NAME for c in collections)
         
         if not exists:
-            # Create collection. Gemini text-embedding-004 has 768 dimensions.
+            # Create collection. Gemini gemini-embedding-2 has 768 dimensions (after custom dimensionality selection).
             client.create_collection(
                 collection_name=COLLECTION_NAME,
                 vectors_config=qmodels.VectorParams(

@@ -8,8 +8,8 @@ from .database import SessionLocal, Capture, CategoryLog, Link, UserSetting
 from . import qdrant_store
 
 # Gemini REST endpoints
-EMBEDDING_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent"
-GENERATE_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+EMBEDDING_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:embedContent"
+GENERATE_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent"
 
 def get_user_api_key(db: Session, user_id: int) -> Optional[str]:
     """Retrieves the Gemini API key from the user's settings, falling back to environment variable."""
@@ -93,7 +93,8 @@ def call_gemini_embedding(text: str, api_key: str) -> List[float]:
             "parts": [
                 {"text": text}
             ]
-        }
+        },
+        "outputDimensionality": 768
     }
     
     response = httpx.post(url, json=payload, timeout=20.0)
