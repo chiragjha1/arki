@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  arki-postgres:
+    image: postgres:16-alpine
+    container_name: arki-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_DB: arki
+    volumes:
+      - arki-db-data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432" # Bind to host 5433 to avoid port conflicts with local running containers
+
+  arki-qdrant:
+    image: qdrant/qdrant:latest
+    container_name: arki-qdrant
+    restart: always
+    ports:
+      - "6334:6333" # Bind to host 6334 to avoid port conflicts with local running containers
+    volumes:
+      - arki-vector-data:/qdrant/storage
+
+  arki-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: arki-app
+    restart: always
+    ports:
+      - "8001:8001"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgrespassword@arki-postgres:5432/arki
+      - QDRANT_HOST=arki-qdrant
+      - QDRANT_PORT=6333
+      - SECRET_KEY=arki_production_cryptographic_secret_key_change_in_real_env
+      - GEMINI_API_KEY=${GEMINI_API_KEY} # Reads from local .env or host shell during build/up
+    depends_on:
+      - arki-postgres
+      - arki-qdrant
+
+volumes:
+  arki-db-data:
+  arki-vector-data:
