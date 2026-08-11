@@ -132,7 +132,20 @@ def call_gemini_analysis(text: str, api_key: str) -> Dict[str, Any]:
             }
         ],
         "generationConfig": {
-            "responseMimeType": "application/json"
+            "responseMimeType": "application/json",
+            "responseSchema": {
+                "type": "OBJECT",
+                "properties": {
+                    "category": {"type": "STRING"},
+                    "sub_category": {"type": "STRING"},
+                    "summary": {"type": "STRING"},
+                    "tags": {
+                        "type": "ARRAY",
+                        "items": {"type": "STRING"}
+                    }
+                },
+                "required": ["category", "sub_category", "summary", "tags"]
+            }
         }
     }
     
