@@ -38,6 +38,28 @@ def init_qdrant():
             print(f"Qdrant collection '{COLLECTION_NAME}' created successfully.")
         else:
             print(f"Qdrant collection '{COLLECTION_NAME}' already exists.")
+            
+        # Create payload indexes for filtered fields to satisfy strict cloud Qdrant indexing rules
+        try:
+            client.create_payload_index(
+                collection_name=COLLECTION_NAME,
+                field_name="user_id",
+                field_schema=qmodels.PayloadSchemaType.INTEGER
+            )
+            client.create_payload_index(
+                collection_name=COLLECTION_NAME,
+                field_name="category",
+                field_schema=qmodels.PayloadSchemaType.KEYWORD
+            )
+            client.create_payload_index(
+                collection_name=COLLECTION_NAME,
+                field_name="source",
+                field_schema=qmodels.PayloadSchemaType.KEYWORD
+            )
+            print("Qdrant payload indexes verified/created.")
+        except Exception as idx_err:
+            print(f"Warning: Could not create payload indexes: {idx_err}")
+            
     except Exception as e:
         print(f"Error initializing Qdrant: {e}")
 
