@@ -640,6 +640,51 @@ def get_system_stats(request: Request, db: Session = Depends(get_db)):
         "qdrant_points_count": qdrant_points
     }
 
+@app.get("/api/admin/debug-db")
+def get_debug_db(request: Request, db: Session = Depends(get_db)):
+    x_debug_key = request.headers.get("x-debug-key")
+    if x_debug_key != "arki_debug_key_987654321_secret":
+        raise HTTPException(status_code=403, detail="Forbidden")
+        
+    users = db.query(User).all()
+    captures = db.query(Capture).all()
+    links = db.query(Link).all()
+    settings = db.query(UserSetting).all()
+    
+    return {
+        "users": [{"id": u.id, "email": u.email} for u in users],
+        "captures": [
+            {
+                "id": c.id, 
+                "user_id": c.user_id, 
+                "raw_text": c.raw_text[:60], 
+                "ai_status": c.ai_status, 
+                "category": c.category, 
+                "summary": c.summary[:60] if c.summary else None
+            } 
+            for c in captures
+        ],
+        "links": [
+            {
+                "id": l.id,
+                "user_id": l.user_id,
+                "source_id": l.source_id,
+                "target_id": l.target_id,
+                "similarity_score": l.similarity_score,
+                "status": l.status
+            }
+            for l in links
+        ],
+        "settings": [
+            {
+                "user_id": s.user_id,
+                "key": s.key,
+                "value": s.value[:15] + "..." if s.value else None
+            }
+            for s in settings
+        ]
+    }
+
 
 # ==========================================
 # PRODUCTION FRONTEND SERVING
