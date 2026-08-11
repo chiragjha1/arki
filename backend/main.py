@@ -38,6 +38,9 @@ def startup_event():
     init_db()
     # Initialize Qdrant collection
     qdrant_store.init_qdrant()
+    # Reprocess any mock captures in the background
+    import threading
+    threading.Thread(target=ai_pipeline.reprocess_mock_captures, daemon=True).start()
 
 # ==========================================
 # AUTH ENDPOINTS

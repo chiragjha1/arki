@@ -362,3 +362,62 @@ def run_relinking_pass(user_id: int):
         return 0
     finally:
         db.close()
+
+def reprocess_mock_captures():
+    """Finds all captures that were processed using mock fallbacks and re-runs them using the live Gemini API."""
+    db = SessionLocal()
+    try:
+        # Find captures with mock summaries
+        mock_captures = db.query(Capture).filter(
+            Capture.summary.like("[Mock AI Summary]%")
+        ).all()
+        
+        if not mock_captures:
+            print("No mock captures found to re-process.")
+            return
+            
+        print(f"Found {len(mock_captures)} mock captures. Starting re-processing...")
+        
+        for cap in mock_captures:
+            api_key = get_user_api_key(db, cap.user_id)
+            if not api_key:
+                print(f"Skipping capture {cap.id}: No API key configured for user {cap.user_id}")
+                continue
+                
+            try:
+                print(f"Re-processing capture {cap.id} using live Gemini API...")
+                vector = call_gemini_embedding(cap.raw_text, api_key)
+                analysis = call_gemini_analysis(cap.raw_text, api_key)
+                
+                # Update Qdrant
+                qdrant_store.upsert_capture(
+                    capture_id=cap.id,
+                    user_id=cap.user_id,
+                    vector=vector,
+                    category=analysis.get("category"),
+                    source=cap.source,
+                    created_at_ts=cap.created_at.timestamp()
+                )
+                
+                # Update DB
+                cap.category = analysis.get("category")
+                cap.sub_category = analysis.get("sub_category")
+                cap.summary = analysis.get("summary")
+                cap.tags = analysis.get("tags", [])
+                cap.ai_status = "completed"
+                db.commit()
+                print(f"Capture {cap.id} successfully re-processed: {cap.category}")
+            except Exception as e:
+                print(f"Error re-processing capture {cap.id}: {e}")
+                
+        # Run a relinking pass for users whose captures were reprocessed
+        user_ids = {cap.user_id for cap in mock_captures}
+        for uid in user_ids:
+            try:
+                run_relinking_pass(uid)
+            except Exception as e:
+                print(f"Error running relinking pass for user {uid}: {e}")
+                
+    finally:
+        db.close()
+
