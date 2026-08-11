@@ -19,7 +19,7 @@ services:
     container_name: arki-qdrant
     restart: always
     ports:
-      - "6334:6333" # Bind to host 6334 to avoid port conflicts with local running containers
+      - "6335:6333" # Bind to host 6335 to avoid port conflicts with local running containers
     volumes:
       - arki-vector-data:/qdrant/storage
 

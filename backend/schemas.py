@@ -95,3 +95,14 @@ class DashboardStats(BaseModel):
     category_counts: dict
     active_connections: int
     ai_success_rate: float
+
+# System-wide metrics schema
+class SystemStats(BaseModel):
+    total_users: int
+    total_captures: int
+    avg_captures_per_user: float
+    total_links: int
+    ai_success_rate: float
+    qdrant_status: str
+    qdrant_points_count: int
+

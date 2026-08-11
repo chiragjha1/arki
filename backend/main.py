@@ -534,6 +534,42 @@ def get_dashboard_stats(current_user: User = Depends(auth.get_current_user), db:
         "ai_success_rate": success_rate
     }
 
+@app.get("/api/admin/system-stats", response_model=schemas.SystemStats)
+def get_system_stats(current_user: User = Depends(auth.get_current_user), db: Session = Depends(get_db)):
+    # Restrict to primary admin user (id 1 or email chiragjha1000@gmail.com)
+    if current_user.id != 1 and current_user.email != "chiragjha1000@gmail.com":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Forbidden: You do not have permissions to view global system administration metrics."
+        )
+        
+    total_users = db.query(User).count()
+    total_captures = db.query(Capture).count()
+    avg_captures = total_captures / total_users if total_users > 0 else 0.0
+    total_links = db.query(Link).filter(Link.status == "confirmed").count()
+    
+    total_non_deleted = db.query(Capture).filter(Capture.deleted_at.is_(None)).count()
+    ai_success = db.query(Capture).filter(Capture.deleted_at.is_(None), Capture.ai_status == "completed").count()
+    success_rate = (ai_success / total_non_deleted) * 100 if total_non_deleted > 0 else 100.0
+    
+    try:
+        qdrant_points = qdrant_store.client.count(collection_name=qdrant_store.COLLECTION_NAME).count
+        qdrant_status = "Healthy"
+    except Exception:
+        qdrant_points = 0
+        qdrant_status = "Unavailable"
+        
+    return {
+        "total_users": total_users,
+        "total_captures": total_captures,
+        "avg_captures_per_user": avg_captures,
+        "total_links": total_links,
+        "ai_success_rate": success_rate,
+        "qdrant_status": qdrant_status,
+        "qdrant_points_count": qdrant_points
+    }
+
+
 # ==========================================
 # PRODUCTION FRONTEND SERVING
 # ==========================================
