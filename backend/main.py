@@ -679,6 +679,44 @@ def get_debug_qdrant(request: Request):
     except Exception as e:
         return {"error": str(e)}
 
+@app.get("/api/admin/debug-search")
+def get_debug_search(request: Request, db: Session = Depends(get_db)):
+    x_debug_key = request.headers.get("x-debug-key")
+    if x_debug_key != "arki_debug_key_987654321_secret":
+        raise HTTPException(status_code=403, detail="Forbidden")
+        
+    captures = db.query(Capture).filter(Capture.user_id == 1).all()
+    search_details = []
+    
+    for cap in captures:
+        vector = None
+        try:
+            points = qdrant_store.client.retrieve(
+                collection_name=qdrant_store.COLLECTION_NAME,
+                ids=[cap.id],
+                with_vectors=True
+            )
+            if points and points[0].vector:
+                vector = points[0].vector
+        except Exception as e:
+            pass
+            
+        if vector:
+            results = qdrant_store.search_captures(user_id=1, query_vector=vector, limit=6)
+            search_details.append({
+                "cap_id": cap.id,
+                "text": cap.raw_text[:30],
+                "results": [
+                    {
+                        "target_id": r["capture_id"],
+                        "score": r["score"],
+                        "category": r["category"]
+                    }
+                    for r in results
+                ]
+            })
+            
+    return {"search_details": search_details}
 @app.get("/api/admin/debug-db")
 def get_debug_db(request: Request, db: Session = Depends(get_db)):
     x_debug_key = request.headers.get("x-debug-key")
