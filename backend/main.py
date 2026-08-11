@@ -17,9 +17,12 @@ app = FastAPI(title="ARKI — AI-Organized Knowledge Capture")
 # Configure CORS for our frontend development and production servers
 allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "")
 if allowed_origins_env:
-    origins = [orig.strip() for orig in allowed_origins_env.split(",") if orig.strip()]
+    # Strip any trailing slashes to prevent exact-match CORS preflight failures
+    origins = [orig.strip().rstrip("/") for orig in allowed_origins_env.split(",") if orig.strip()]
 else:
     origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+print(f"CORS origins configured: {origins}")
 
 app.add_middleware(
     CORSMiddleware,
