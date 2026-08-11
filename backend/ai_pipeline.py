@@ -261,8 +261,8 @@ def process_capture_pipeline(capture_id: int, user_id: int):
             if target_id == capture.id:
                 continue
                 
-            # Only propose if similarity score is high (e.g., > 0.60 for cosine similarity)
-            if res["score"] > 0.60:
+            # Only propose if similarity score is high (e.g., > 0.80 for cosine similarity)
+            if res["score"] > 0.80:
                 # Check if link already exists in any state
                 existing_link = db.query(Link).filter(
                     ((Link.source_id == capture.id) & (Link.target_id == target_id)) |
@@ -298,10 +298,15 @@ def run_relinking_pass(user_id: int):
     """Runs a full re-linking pass over all user captures."""
     db = SessionLocal()
     try:
-        # First, prune any pre-existing duplicate links in the database to heal legacy duplicates
+        # First, prune any pre-existing duplicate links and links below the 80% threshold
         existing_links = db.query(Link).filter(Link.user_id == user_id).all()
         seen_pairs = set()
         for link in existing_links:
+            # Delete suggested links below the 80% similarity threshold
+            if link.status == "suggested" and link.similarity_score < 0.80:
+                db.delete(link)
+                continue
+                
             pair = (min(link.source_id, link.target_id), max(link.source_id, link.target_id))
             if pair in seen_pairs:
                 db.delete(link)
@@ -356,7 +361,7 @@ def run_relinking_pass(user_id: int):
                 if pair in proposed_in_session:
                     continue
                     
-                if res["score"] > 0.60:
+                if res["score"] > 0.80:
                     existing_link = db.query(Link).filter(
                         ((Link.source_id == cap.id) & (Link.target_id == target_id)) |
                         ((Link.source_id == target_id) & (Link.target_id == cap.id))
