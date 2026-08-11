@@ -607,7 +607,7 @@ def get_system_stats(request: Request, db: Session = Depends(get_db)):
         else:
             token = request.query_params.get("token")
             
-        current_user = auth.get_current_user(token=token, db=db)
+        current_user = auth.get_current_user(request=request, token=token, db=db)
         if current_user.email != "chiragjha1000@gmail.com":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
