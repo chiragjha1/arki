@@ -424,13 +424,15 @@ def update_link_status(
 
 @app.post("/api/links/relink")
 def trigger_full_relinking(
-    background_tasks: BackgroundTasks,
     current_user: User = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
-    # Runs the re-linking script in the background
-    background_tasks.add_task(ai_pipeline.run_relinking_pass, user_id=current_user.id)
-    return {"message": "Re-linking pass triggered in background."}
+    # Runs the re-linking script synchronously
+    links_count = ai_pipeline.run_relinking_pass(user_id=current_user.id)
+    if links_count == 0:
+        return {"message": "Scan complete. No new semantic connections were found."}
+    return {"message": f"Scan complete. Proposed {links_count} new semantic connection(s)."}
+
 
 # ==========================================
 # SETTINGS ENDPOINTS

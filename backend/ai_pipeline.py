@@ -309,14 +309,28 @@ def run_relinking_pass(user_id: int):
         
         links_proposed = 0
         for cap in captures:
-            # Generate embedding
-            if api_key:
-                try:
-                    vector = call_gemini_embedding(cap.raw_text, api_key)
-                except Exception:
+            # Try to retrieve existing vector from Qdrant to avoid duplicate embedding API calls
+            vector = None
+            try:
+                points = qdrant_store.client.retrieve(
+                    collection_name=qdrant_store.COLLECTION_NAME,
+                    ids=[cap.id],
+                    with_vectors=True
+                )
+                if points and points[0].vector:
+                    vector = points[0].vector
+            except Exception as e:
+                print(f"Error retrieving vector from Qdrant: {e}")
+                
+            if not vector:
+                if api_key:
+                    try:
+                        vector = call_gemini_embedding(cap.raw_text, api_key)
+                    except Exception:
+                        vector = generate_mock_embedding(cap.raw_text)
+                else:
                     vector = generate_mock_embedding(cap.raw_text)
-            else:
-                vector = generate_mock_embedding(cap.raw_text)
+
                 
             # Perform similarity search
             results = qdrant_store.search_captures(user_id=user_id, query_vector=vector, limit=6)

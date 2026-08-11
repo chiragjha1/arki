@@ -467,10 +467,11 @@ export default function App() {
   // Re-linking trigger
   const handleTriggerRelink = async () => {
     try {
-      await apiRequest("/api/links/relink", "POST");
-      alert("AI re-linking pass triggered in the background.");
+      const res = await apiRequest("/api/links/relink", "POST");
+      alert(res.message);
+      loadData();
     } catch (err) {
-      alert("Failed to run re-linking");
+      alert("Failed to run re-linking: " + err.message);
     }
   };
 
