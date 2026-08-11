@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, func
 
-from .database import init_db, get_db, User, Capture, CategoryLog, Link, UserSetting
+from database import init_db, get_db, User, Capture, CategoryLog, Link, UserSetting
 from . import schemas, auth, qdrant_store, ai_pipeline
 
 from fastapi.staticfiles import StaticFiles
