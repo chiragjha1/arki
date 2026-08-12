@@ -103,16 +103,30 @@ def call_gemini_embedding(text: str, api_key: str) -> List[float]:
     
     return res_data["embedding"]["values"]
 
-def call_gemini_analysis(text: str, api_key: str) -> Dict[str, Any]:
+def call_gemini_analysis(
+    text: str,
+    api_key: str,
+    existing_categories: Optional[List[str]] = None,
+    existing_subcategories: Optional[List[str]] = None
+) -> Dict[str, Any]:
     """Calls Gemini API with structured JSON output configurations to extract categories and summaries."""
     url = f"{GENERATE_API_URL}?key={api_key}"
     
     prompt = f"""
     Analyze the following raw knowledge capture text. Categorize it, summarize it, and extract key tags.
+    
+    CRITICAL TAXONOMY REUSE INSTRUCTION:
+    We want to keep the folders/taxonomy clean and consistent. Here are the user's existing categories and sub-categories:
+    - Existing Categories: {existing_categories or []}
+    - Existing Sub-categories: {existing_subcategories or []}
+    
+    If the content fits reasonably well into one of these existing categories and/or sub-categories, you MUST reuse them exactly (case-sensitive) instead of creating new ones!
+    Only create a new category or sub-category if the content absolutely does not fit into the existing ones. Do not create synonyms, minor variations, or different word forms (e.g. if "Philosophy" exists, do not create "Philosophical"; if "Physics" exists under "Science", do not create a separate "Physics" high-level folder or "Theoretical Physics" subcategory unless it is totally different).
+    
     You must return a JSON object with this exact structure:
     {{
-      "category": "High level category (e.g., Technology, Health, Finance, Philosophy, Personal, Science, Literature, History)",
-      "sub_category": "More specific sub-category (e.g., Software Architecture, Nutrition, Investing, Stoicism, Habit Building, Biology, Fiction, Rome)",
+      "category": "High level category (re-use from the Existing Categories list if it fits)",
+      "sub_category": "More specific sub-category (re-use from the Existing Sub-categories list if it fits)",
       "summary": "A 2-3 sentence concise and informative summary of the capture content.",
       "tags": ["extracted-tag-1", "extracted-tag-2", "tag-3"]
     }}
@@ -165,6 +179,20 @@ def call_gemini_analysis(text: str, api_key: str) -> Dict[str, Any]:
             
     return parsed_json
 
+def get_existing_taxonomy(db: Session, user_id: int):
+    """Fetches all existing distinct categories and subcategories for the user."""
+    categories = [
+        r[0] for r in db.query(Capture.category)
+        .filter(Capture.user_id == user_id, Capture.category.isnot(None), Capture.deleted_at.is_(None))
+        .distinct().all()
+    ]
+    sub_categories = [
+        r[0] for r in db.query(Capture.sub_category)
+        .filter(Capture.user_id == user_id, Capture.sub_category.isnot(None), Capture.deleted_at.is_(None))
+        .distinct().all()
+    ]
+    return categories, sub_categories
+
 def process_capture_pipeline(capture_id: int, user_id: int):
     """Executes the AI capture processing pipeline in the background."""
     db = SessionLocal()
@@ -201,11 +229,17 @@ def process_capture_pipeline(capture_id: int, user_id: int):
             created_at_ts=created_at_ts
         )
         
-        # 3. Call Gemini Analysis
+        # 3. Call Gemini Analysis with existing taxonomy to reuse folders
         analysis = None
         if api_key:
             try:
-                analysis = call_gemini_analysis(capture.raw_text, api_key)
+                existing_cats, existing_subcats = get_existing_taxonomy(db, user_id)
+                analysis = call_gemini_analysis(
+                    capture.raw_text,
+                    api_key,
+                    existing_categories=existing_cats,
+                    existing_subcategories=existing_subcats
+                )
             except Exception as e:
                 print(f"Gemini analysis API call failed: {e}. Falling back to mock analysis.")
                 analysis = generate_mock_analysis(capture.raw_text)
@@ -410,7 +444,13 @@ def reprocess_mock_captures():
             try:
                 print(f"Re-processing capture {cap.id} using live Gemini API...")
                 vector = call_gemini_embedding(cap.raw_text, api_key)
-                analysis = call_gemini_analysis(cap.raw_text, api_key)
+                existing_cats, existing_subcats = get_existing_taxonomy(db, cap.user_id)
+                analysis = call_gemini_analysis(
+                    cap.raw_text,
+                    api_key,
+                    existing_categories=existing_cats,
+                    existing_subcategories=existing_subcats
+                )
                 
                 # Update Qdrant
                 qdrant_store.upsert_capture(

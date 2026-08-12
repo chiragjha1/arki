@@ -448,7 +448,7 @@ def trigger_full_relinking(
 
     # 1. On-the-fly heal/reprocess any mock captures for this user first
     # This ensures that if they save their API key and click scan, the notes are re-processed immediately
-    from .ai_pipeline import get_user_api_key, call_gemini_embedding, call_gemini_analysis
+    from .ai_pipeline import get_user_api_key, call_gemini_embedding, call_gemini_analysis, get_existing_taxonomy
     
     healed_count = 0
     errors = []
@@ -463,7 +463,13 @@ def trigger_full_relinking(
         for cap in mock_captures:
             try:
                 vector = call_gemini_embedding(cap.raw_text, api_key)
-                analysis = call_gemini_analysis(cap.raw_text, api_key)
+                existing_cats, existing_subcats = get_existing_taxonomy(db, user_id)
+                analysis = call_gemini_analysis(
+                    cap.raw_text,
+                    api_key,
+                    existing_categories=existing_cats,
+                    existing_subcategories=existing_subcats
+                )
                 
                 # Update Qdrant
                 qdrant_store.upsert_capture(
