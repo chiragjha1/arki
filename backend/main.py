@@ -484,11 +484,18 @@ def trigger_full_relinking(
         ).all()
         
         for cap in mock_captures:
+            # Rollback to clear any previous failed transactions and check if capture still exists
+            db.rollback()
+            live_cap = db.query(Capture).filter(Capture.id == cap.id).first()
+            if not live_cap:
+                print(f"Capture {cap.id} was concurrently deleted. Skipping on-the-fly healing.")
+                continue
+                
             try:
-                vector = call_gemini_embedding(cap.raw_text, api_key)
+                vector = call_gemini_embedding(live_cap.raw_text, api_key)
                 existing_cats, existing_subcats = get_existing_taxonomy(db, user_id)
                 analysis = call_gemini_analysis(
-                    cap.raw_text,
+                    live_cap.raw_text,
                     api_key,
                     existing_categories=existing_cats,
                     existing_subcategories=existing_subcats
@@ -496,23 +503,24 @@ def trigger_full_relinking(
                 
                 # Update Qdrant
                 qdrant_store.upsert_capture(
-                    capture_id=cap.id,
+                    capture_id=live_cap.id,
                     user_id=user_id,
                     vector=vector,
                     category=analysis.get("category"),
-                    source=cap.source,
-                    created_at_ts=cap.created_at.timestamp()
+                    source=live_cap.source,
+                    created_at_ts=live_cap.created_at.timestamp()
                 )
                 
                 # Update DB
-                cap.category = analysis.get("category")
-                cap.sub_category = analysis.get("sub_category")
-                cap.summary = analysis.get("summary")
-                cap.tags = analysis.get("tags", [])
-                cap.ai_status = "completed"
+                live_cap.category = analysis.get("category")
+                live_cap.sub_category = analysis.get("sub_category")
+                live_cap.summary = analysis.get("summary")
+                live_cap.tags = analysis.get("tags", [])
+                live_cap.ai_status = "completed"
                 db.commit()
                 healed_count += 1
             except Exception as e:
+                db.rollback()
                 err_msg = str(e)
                 print(f"Error healing capture {cap.id} during scan: {err_msg}")
                 errors.append(f"Note {cap.id} re-processing failed: {err_msg}")

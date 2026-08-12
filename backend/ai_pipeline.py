@@ -450,60 +450,76 @@ def reprocess_mock_captures():
         print(f"Found {len(mock_captures)} mock captures. Starting re-processing...")
         
         for cap in mock_captures:
-            api_key = get_user_api_key(db, cap.user_id)
+            # 1. Roll back to clear any previous failed transactions and check if capture still exists
+            db.rollback()
+            live_cap = db.query(Capture).filter(Capture.id == cap.id).first()
+            if not live_cap:
+                print(f"Capture {cap.id} was concurrently deleted. Skipping re-processing.")
+                continue
+                
+            api_key = get_user_api_key(db, live_cap.user_id)
             if not api_key:
-                print(f"Skipping capture {cap.id}: No API key configured for user {cap.user_id}")
+                print(f"Skipping capture {cap.id}: No API key configured for user {live_cap.user_id}")
                 continue
                 
             try:
-                print(f"Re-processing capture {cap.id} using live Gemini API...")
+                print(f"Re-processing capture {live_cap.id} using live Gemini API...")
                 
                 # 1. Embedding
                 try:
-                    vector = call_gemini_embedding(cap.raw_text, api_key)
-                    log_api_usage(db, cap.user_id, "embedding", "success")
+                    vector = call_gemini_embedding(live_cap.raw_text, api_key)
+                    log_api_usage(db, live_cap.user_id, "embedding", "success")
                 except Exception as e_embed:
-                    log_api_usage(db, cap.user_id, "embedding", "failed", str(e_embed))
+                    log_api_usage(db, live_cap.user_id, "embedding", "failed", str(e_embed))
                     raise e_embed
                     
                 # 2. Analysis
-                existing_cats, existing_subcats = get_existing_taxonomy(db, cap.user_id)
+                existing_cats, existing_subcats = get_existing_taxonomy(db, live_cap.user_id)
                 try:
                     analysis = call_gemini_analysis(
-                        cap.raw_text,
+                        live_cap.raw_text,
                         api_key,
                         existing_categories=existing_cats,
                         existing_subcategories=existing_subcats
                     )
-                    log_api_usage(db, cap.user_id, "analysis", "success")
+                    log_api_usage(db, live_cap.user_id, "analysis", "success")
                 except Exception as e_anal:
-                    log_api_usage(db, cap.user_id, "analysis", "failed", str(e_anal))
+                    log_api_usage(db, live_cap.user_id, "analysis", "failed", str(e_anal))
                     raise e_anal
                 
                 # Update Qdrant
                 qdrant_store.upsert_capture(
-                    capture_id=cap.id,
-                    user_id=cap.user_id,
+                    capture_id=live_cap.id,
+                    user_id=live_cap.user_id,
                     vector=vector,
                     category=analysis.get("category"),
-                    source=cap.source,
-                    created_at_ts=cap.created_at.timestamp()
+                    source=live_cap.source,
+                    created_at_ts=live_cap.created_at.timestamp()
                 )
                 
                 # Update DB
-                cap.category = analysis.get("category")
-                cap.sub_category = analysis.get("sub_category")
-                cap.summary = analysis.get("summary")
-                cap.tags = analysis.get("tags", [])
-                cap.ai_status = "completed"
-                cap.error_message = None
+                live_cap.category = analysis.get("category")
+                live_cap.sub_category = analysis.get("sub_category")
+                live_cap.summary = analysis.get("summary")
+                live_cap.tags = analysis.get("tags", [])
+                live_cap.ai_status = "completed"
+                live_cap.error_message = None
                 db.commit()
-                print(f"Capture {cap.id} successfully re-processed: {cap.category}")
+                print(f"Capture {live_cap.id} successfully re-processed: {live_cap.category}")
             except Exception as e:
                 print(f"Error re-processing capture {cap.id}: {e}")
-                cap.ai_status = "failed"
-                cap.error_message = f"AI Re-processing failed: {e}"
-                db.commit()
+                db.rollback()
+                
+                # Retrieve fresh state in new transaction context to record failure reason
+                try:
+                    failed_cap = db.query(Capture).filter(Capture.id == cap.id).first()
+                    if failed_cap:
+                        failed_cap.ai_status = "failed"
+                        failed_cap.error_message = f"AI Re-processing failed: {e}"
+                        db.commit()
+                except Exception as inner_e:
+                    print(f"Failed to save error status for capture {cap.id}: {inner_e}")
+                    db.rollback()
                 
         # Run a relinking pass for users whose captures were reprocessed
         user_ids = {cap.user_id for cap in mock_captures}
