@@ -187,7 +187,7 @@ export default function App() {
   const [editTagsString, setEditTagsString] = useState("");
 
   // Settings State
-  const [geminiApiKey, setGeminiApiKey] = useState("");
+  const [geminiApiKeys, setGeminiApiKeys] = useState([""]);
   const [showApiKeys, setShowApiKeys] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
@@ -330,8 +330,11 @@ export default function App() {
       setStats(statsList);
 
       const keySetting = settingsList.find(s => s.key === "GEMINI_API_KEY");
-      if (keySetting) {
-        setGeminiApiKey(keySetting.value);
+      if (keySetting && keySetting.value) {
+        const splitKeys = keySetting.value.split(",").map(k => k.trim()).filter(Boolean);
+        setGeminiApiKeys(splitKeys.length > 0 ? splitKeys : [""]);
+      } else {
+        setGeminiApiKeys([""]);
       }
 
       // Safely load Gemini API usage metrics
@@ -553,7 +556,8 @@ export default function App() {
     e.preventDefault();
     setSaveSuccess(false);
     try {
-      await apiRequest("/api/settings", "POST", { key: "GEMINI_API_KEY", value: geminiApiKey });
+      const joinedKeys = geminiApiKeys.map(k => k.trim()).filter(Boolean).join(",");
+      await apiRequest("/api/settings", "POST", { key: "GEMINI_API_KEY", value: joinedKeys });
       setSaveSuccess(true);
       loadData();
       setTimeout(() => setSaveSuccess(false), 3000);
@@ -1267,23 +1271,67 @@ export default function App() {
             <div className="glass-panel" style={{ padding: "20px" }}>
               <h4 style={{ fontWeight: "600", marginBottom: "12px" }}>Gemini API Integration</h4>
               <form onSubmit={handleSaveSettings} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-                <div className="form-group">
+                <div className="form-group" style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
                   <label>Gemini API Keys</label>
-                  <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
-                    <input
-                      type={showApiKeys ? "text" : "password"}
-                      placeholder="Key 1, Key 2, Key 3..."
-                      className="form-input"
-                      style={{ paddingRight: "50px", width: "100%" }}
-                      value={geminiApiKey}
-                      onChange={(e) => setGeminiApiKey(e.target.value)}
-                    />
+                  
+                  {geminiApiKeys.map((keyVal, idx) => (
+                    <div key={idx} style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      <div style={{ position: "relative", display: "flex", alignItems: "center", flex: "1" }}>
+                        <input
+                          type={showApiKeys ? "text" : "password"}
+                          placeholder={idx === 0 ? "Primary Gemini API Key (AIzaSy...)" : `Fallback Key #${idx} (AIzaSy...)`}
+                          className="form-input"
+                          style={{ width: "100%", paddingRight: "10px" }}
+                          value={keyVal}
+                          onChange={(e) => {
+                            const newKeys = [...geminiApiKeys];
+                            newKeys[idx] = e.target.value;
+                            setGeminiApiKeys(newKeys);
+                          }}
+                        />
+                      </div>
+                      
+                      {geminiApiKeys.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const newKeys = geminiApiKeys.filter((_, i) => i !== idx);
+                            setGeminiApiKeys(newKeys);
+                          }}
+                          className="card-action-btn"
+                          style={{
+                            padding: "6px 10px",
+                            borderColor: "var(--accent-rose)",
+                            color: "var(--accent-rose)",
+                            borderRadius: "6px"
+                          }}
+                        >
+                          <Icon name="close" style={{ width: "14px", height: "14px" }} />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "4px" }}>
+                    <button
+                      type="button"
+                      onClick={() => setGeminiApiKeys([...geminiApiKeys, ""])}
+                      className="card-action-btn"
+                      style={{
+                        padding: "4px 10px",
+                        fontSize: "0.8rem",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "4px"
+                      }}
+                    >
+                      <span>+ Add Fallback Key</span>
+                    </button>
+                    
                     <button 
                       type="button"
                       onClick={() => setShowApiKeys(!showApiKeys)}
                       style={{
-                        position: "absolute",
-                        right: "10px",
                         background: "none",
                         border: "none",
                         cursor: "pointer",
@@ -1292,11 +1340,12 @@ export default function App() {
                         fontWeight: "600"
                       }}
                     >
-                      {showApiKeys ? "Hide" : "Show"}
+                      {showApiKeys ? "Hide Keys" : "Show Keys"}
                     </button>
                   </div>
+                  
                   <p style={{ fontSize: "0.7rem", color: "var(--text-muted)", marginTop: "4px" }}>
-                    Enter your Gemini API key. You can input multiple keys separated by commas (e.g. <code>key1, key2, key3</code>) to act as fallbacks if one gets rate-limited!
+                    Add fallback keys. If your primary API key hits a rate limit (15 RPM), ARKI automatically rotates to the fallback keys.
                   </p>
                 </div>
                 
