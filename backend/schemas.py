@@ -41,6 +41,7 @@ class CaptureResponse(BaseModel):
     summary: Optional[str] = None
     tags: List[str] = []
     ai_status: str
+    error_message: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     deleted_at: Optional[datetime] = None
@@ -105,4 +106,11 @@ class SystemStats(BaseModel):
     ai_success_rate: float
     qdrant_status: str
     qdrant_points_count: int
+
+# API Usage response schema
+class ApiUsageResponse(BaseModel):
+    requests_today: int
+    daily_limit: int
+    remaining_today: int
+    recent_errors: List[str]
 

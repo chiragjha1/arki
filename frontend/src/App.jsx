@@ -160,6 +160,7 @@ export default function App() {
   const [captures, setCaptures] = useState([]);
   const [resurfaced, setResurfaced] = useState([]);
   const [notifications, setNotifications] = useState([]);
+  const [apiUsage, setApiUsage] = useState(null);
   const [links, setLinks] = useState([]);
   const [settings, setSettings] = useState([]);
   const [stats, setStats] = useState({ total_captures: 0, category_counts: {}, active_connections: 0, ai_success_rate: 100 });
@@ -331,6 +332,14 @@ export default function App() {
       if (keySetting) {
         setGeminiApiKey(keySetting.value);
       }
+
+      // Safely load Gemini API usage metrics
+      try {
+        const usageData = await apiRequest("/api/settings/usage");
+        setApiUsage(usageData);
+      } catch (usageErr) {
+        console.error("Failed to load Gemini usage quota", usageErr);
+      }
     } catch (err) {
       console.error("Failed to load initial dashboard data", err);
     }
@@ -361,6 +370,11 @@ export default function App() {
           setNotifications(notifsList);
           setLinks(linksList);
           setStats(statsList);
+          
+          try {
+            const usageData = await apiRequest("/api/settings/usage");
+            setApiUsage(usageData);
+          } catch (e) {}
         }
       } catch (err) {
         console.error("Polling error", err);
@@ -509,6 +523,17 @@ export default function App() {
       loadData();
     } catch (err) {
       alert("Failed to permanently delete capture");
+    }
+  };
+
+  const handleRetryProcessing = async (id) => {
+    try {
+      const updated = await apiRequest(`/api/captures/${id}/retry`, "POST");
+      setCaptures(prev => prev.map(c => c.id === id ? updated : c));
+      alert("AI re-processing queued in the background.");
+      loadData();
+    } catch (err) {
+      alert("Failed to retry processing: " + err.message);
     }
   };
 
@@ -768,20 +793,7 @@ export default function App() {
       {/* Main View Area */}
       <main className="main-content">
         
-        {/* Unread AI notifications */}
-        {notifications.map(notif => (
-          <div key={notif.id} className="notification-banner glass-panel">
-            <div className="notification-content" style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              <Icon name="info" style={{ color: "var(--primary)" }} />
-              <span>
-                Reclassified: <strong>{notif.old_category}</strong> &rarr; <strong>{notif.new_category}</strong> ({notif.new_sub_category})
-              </span>
-            </div>
-            <button onClick={() => handleDismissNotification(notif.id)} className="notification-dismiss">
-              <Icon name="close" style={{ width: "16px", height: "16px" }} />
-            </button>
-          </div>
-        ))}
+        
 
         {/* View 1: Main Frictionless Capture & Feed */}
         {currentView === "capture" && (
@@ -879,7 +891,7 @@ export default function App() {
                     <div 
                       key={cap.id} 
                       id={`capture-card-${cap.id}`}
-                      className={`capture-card glass-panel ${isPending ? 'ai-processing-card' : ''}`}
+                      className={`capture-card glass-panel ${isPending ? 'ai-processing-card' : ''} ${cap.ai_status === 'failed' ? 'ai-failed-card' : ''}`}
                     >
                       {isEditing ? (
                         <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
@@ -928,9 +940,9 @@ export default function App() {
                       ) : (
                         <>
                           <div className="card-header-row">
-                            <span className="category-badge">
-                              <Icon name="folder" style={{ width: "12px", height: "12px" }} />
-                              {cap.category} • {cap.sub_category}
+                            <span className="category-badge" style={cap.ai_status === "failed" ? { color: "var(--accent-rose)", borderColor: "rgba(239, 68, 68, 0.3)", background: "rgba(239, 68, 68, 0.05)" } : {}}>
+                              <Icon name={cap.ai_status === "failed" ? "info" : "folder"} style={{ width: "12px", height: "12px" }} />
+                              {cap.ai_status === "failed" ? "AI Processing Failed" : `${cap.category} • ${cap.sub_category}`}
                             </span>
                             <span className="card-timestamp">
                               {new Date(cap.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
@@ -939,6 +951,26 @@ export default function App() {
 
                           <div className="card-text">{cap.raw_text}</div>
                           
+                          {cap.ai_status === "failed" && (
+                            <div className="ai-error-banner" style={{ marginTop: "10px", padding: "10px 12px", background: "rgba(239, 68, 68, 0.06)", border: "1px solid rgba(239, 68, 68, 0.15)", borderRadius: "6px", color: "var(--text-primary)", fontSize: "0.8rem", display: "flex", flexDirection: "column", gap: "6px" }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: "6px", fontWeight: "700", color: "var(--accent-rose)" }}>
+                                <Icon name="info" style={{ color: "var(--accent-rose)", width: "14px", height: "14px" }} />
+                                Error Details
+                              </div>
+                              <div style={{ color: "var(--text-secondary)", fontSize: "0.75rem", fontFamily: "monospace", wordBreak: "break-all" }}>
+                                {cap.error_message || "Check settings or retry API processing."}
+                              </div>
+                              <button 
+                                onClick={() => handleRetryProcessing(cap.id)} 
+                                className="card-action-btn" 
+                                style={{ marginTop: "4px", background: "var(--accent-rose)", color: "white", border: "none", padding: "4px 10px", borderRadius: "4px", fontSize: "0.7rem", cursor: "pointer", fontWeight: "700", alignSelf: "flex-start", display: "flex", alignItems: "center", gap: "4px" }}
+                              >
+                                <Icon name="refresh" style={{ width: "10px", height: "10px", fill: "white" }} />
+                                Retry Processing
+                              </button>
+                            </div>
+                          )}
+
                           {cap.summary && <div className="card-summary">{cap.summary}</div>}
 
                           {cap.tags && cap.tags.length > 0 && (
@@ -1244,7 +1276,7 @@ export default function App() {
                     onChange={(e) => setGeminiApiKey(e.target.value)}
                   />
                   <p style={{ fontSize: "0.7rem", color: "var(--text-muted)", marginTop: "4px" }}>
-                    If left blank, ARKI runs fallbacks using mock embeddings and standard regex classifications.
+                    Enter your Gemini API key to enable semantic analysis, summaries, and smart relational linking.
                   </p>
                 </div>
                 
@@ -1254,6 +1286,50 @@ export default function App() {
                 {saveSuccess && <span style={{ color: "var(--accent-emerald)", fontSize: "0.8rem", textAlign: "right" }}>API key updated successfully.</span>}
               </form>
             </div>
+
+            {/* API Usage logs panel */}
+            {apiUsage && (
+              <div className="glass-panel" style={{ padding: "20px" }}>
+                <h4 style={{ fontWeight: "600", marginBottom: "12px", display: "flex", alignItems: "center", gap: "6px" }}>
+                  <Icon name="info" style={{ color: "var(--primary)", width: "16px", height: "16px" }} />
+                  Gemini API Usage & Limits
+                </h4>
+                <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem" }}>
+                    <span style={{ color: "var(--text-secondary)" }}>API Requests (Last 24h)</span>
+                    <span style={{ fontWeight: "600" }}>{apiUsage.requests_today} / {apiUsage.daily_limit}</span>
+                  </div>
+                  
+                  {/* Progress Bar */}
+                  <div style={{ width: "100%", height: "8px", background: "var(--bg-secondary)", borderRadius: "4px", overflow: "hidden" }}>
+                    <div style={{
+                      width: `${Math.min(100, (apiUsage.requests_today / apiUsage.daily_limit) * 100)}%`,
+                      height: "100%",
+                      background: "var(--primary)",
+                      transition: "width 0.3s ease"
+                    }} />
+                  </div>
+                  
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.8rem", color: "var(--text-muted)", marginTop: "4px" }}>
+                    <span>Remaining Daily Limit: {apiUsage.remaining_today} requests</span>
+                    <span>Free Tier Limit: 1,000 requests/day</span>
+                  </div>
+                  
+                  {apiUsage.recent_errors && apiUsage.recent_errors.length > 0 && (
+                    <div style={{ marginTop: "12px", borderTop: "1px solid var(--border-color)", paddingTop: "12px" }}>
+                      <span style={{ fontSize: "0.75rem", color: "var(--accent-rose)", fontWeight: "700", display: "block", marginBottom: "6px" }}>
+                        RECENT API ERRORS
+                      </span>
+                      <ul style={{ margin: "0", paddingLeft: "16px", fontSize: "0.75rem", color: "var(--text-muted)", display: "flex", flexDirection: "column", gap: "4px" }}>
+                        {apiUsage.recent_errors.map((err, idx) => (
+                          <li key={idx} style={{ wordBreak: "break-all" }}>{err}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Statistics Dashboard Panel */}
             <div className="glass-panel" style={{ padding: "20px" }}>

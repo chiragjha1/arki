@@ -340,6 +340,33 @@ def permanent_delete_capture(capture_id: int, current_user: User = Depends(auth.
     db.commit()
     return {"message": "Capture permanently deleted."}
 
+@app.post("/api/captures/{capture_id}/retry", response_model=schemas.CaptureResponse)
+def retry_capture_processing(
+    capture_id: int,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    capture = db.query(Capture).filter(
+        Capture.id == capture_id,
+        Capture.user_id == current_user.id
+    ).first()
+    if not capture:
+        raise HTTPException(status_code=404, detail="Capture not found")
+        
+    capture.ai_status = "pending"
+    capture.error_message = None
+    db.commit()
+    db.refresh(capture)
+    
+    background_tasks.add_task(
+        ai_pipeline.process_capture_pipeline,
+        capture_id=capture.id,
+        user_id=current_user.id
+    )
+    
+    return capture
+
 # ==========================================
 # TRASH ENDPOINT
 # ==========================================
@@ -360,11 +387,7 @@ def get_trash_captures(current_user: User = Depends(auth.get_current_user), db: 
 
 @app.get("/api/notifications", response_model=List[schemas.CategoryLogResponse])
 def get_unread_notifications(current_user: User = Depends(auth.get_current_user), db: Session = Depends(get_db)):
-    return db.query(CategoryLog).join(Capture).filter(
-        Capture.user_id == current_user.id,
-        CategoryLog.dismissed == False,
-        CategoryLog.changed_by == "ai"
-    ).order_by(CategoryLog.created_at.desc()).all()
+    return []
 
 @app.post("/api/notifications/{log_id}/dismiss")
 def dismiss_notification(log_id: int, current_user: User = Depends(auth.get_current_user), db: Session = Depends(get_db)):
@@ -541,6 +564,38 @@ def save_setting(setting_in: schemas.UserSettingCreate, current_user: User = Dep
     db.commit()
     db.refresh(setting)
     return setting
+
+@app.get("/api/settings/usage", response_model=schemas.ApiUsageResponse)
+def get_api_usage(
+    current_user: User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    from datetime import datetime, timedelta
+    from .database import ApiUsageLog
+    
+    since_time = datetime.utcnow() - timedelta(hours=24)
+    requests_today = db.query(ApiUsageLog).filter(
+        ApiUsageLog.user_id == current_user.id,
+        ApiUsageLog.created_at >= since_time
+    ).count()
+    
+    daily_limit = 1000
+    remaining_today = max(0, daily_limit - requests_today)
+    
+    # Get recent errors
+    recent_failures = db.query(ApiUsageLog).filter(
+        ApiUsageLog.user_id == current_user.id,
+        ApiUsageLog.status == "failed"
+    ).order_by(ApiUsageLog.created_at.desc()).limit(5).all()
+    
+    recent_errors = [f.error_message for f in recent_failures if f.error_message]
+    
+    return {
+        "requests_today": requests_today,
+        "daily_limit": daily_limit,
+        "remaining_today": remaining_today,
+        "recent_errors": recent_errors
+    }
 
 # ==========================================
 # RETENTION / RESURFACING (FSRS & ON THIS DAY)

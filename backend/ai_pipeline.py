@@ -4,8 +4,24 @@ import time
 import httpx
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
-from .database import SessionLocal, Capture, CategoryLog, Link, UserSetting
+from .database import SessionLocal, Capture, CategoryLog, Link, UserSetting, ApiUsageLog
 from . import qdrant_store
+
+def log_api_usage(db: Session, user_id: int, api_type: str, status: str, error_message: Optional[str] = None):
+    try:
+        # Create a new session specifically for usage logging to avoid interfering with parent transaction commits/rollbacks
+        log_db = SessionLocal()
+        log = ApiUsageLog(
+            user_id=user_id,
+            api_type=api_type,
+            status=status,
+            error_message=error_message
+        )
+        log_db.add(log)
+        log_db.commit()
+        log_db.close()
+    except Exception as e:
+        print(f"Error logging API usage: {e}")
 
 # Gemini REST endpoints
 EMBEDDING_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:embedContent"
@@ -205,18 +221,27 @@ def process_capture_pipeline(capture_id: int, user_id: int):
             
         # Get user API key
         api_key = get_user_api_key(db, user_id)
-        
+        if not api_key:
+            err_msg = "No Gemini API key configured. Please add your Gemini API key in settings."
+            capture.ai_status = "failed"
+            capture.error_message = err_msg
+            db.commit()
+            log_api_usage(db, user_id, "embedding", "failed", err_msg)
+            return
+            
         # 2. Generate Vector and Upsert to Qdrant
         vector = None
-        if api_key:
-            try:
-                vector = call_gemini_embedding(capture.raw_text, api_key)
-            except Exception as e:
-                print(f"Gemini embedding API call failed: {e}. Falling back to mock embedding.")
-                vector = generate_mock_embedding(capture.raw_text)
-        else:
-            print("No Gemini API key configured. Generating mock embedding.")
-            vector = generate_mock_embedding(capture.raw_text)
+        try:
+            vector = call_gemini_embedding(capture.raw_text, api_key)
+            log_api_usage(db, user_id, "embedding", "success")
+        except Exception as e:
+            err_msg = f"AI Embedding failed: {e}"
+            print(err_msg)
+            capture.ai_status = "failed"
+            capture.error_message = err_msg
+            db.commit()
+            log_api_usage(db, user_id, "embedding", "failed", str(e))
+            return
             
         # Save embedding in Qdrant
         created_at_ts = capture.created_at.timestamp()
@@ -231,46 +256,34 @@ def process_capture_pipeline(capture_id: int, user_id: int):
         
         # 3. Call Gemini Analysis with existing taxonomy to reuse folders
         analysis = None
-        if api_key:
-            try:
-                existing_cats, existing_subcats = get_existing_taxonomy(db, user_id)
-                analysis = call_gemini_analysis(
-                    capture.raw_text,
-                    api_key,
-                    existing_categories=existing_cats,
-                    existing_subcategories=existing_subcats
-                )
-            except Exception as e:
-                print(f"Gemini analysis API call failed: {e}. Falling back to mock analysis.")
-                analysis = generate_mock_analysis(capture.raw_text)
-        else:
-            analysis = generate_mock_analysis(capture.raw_text)
+        try:
+            existing_cats, existing_subcats = get_existing_taxonomy(db, user_id)
+            analysis = call_gemini_analysis(
+                capture.raw_text,
+                api_key,
+                existing_categories=existing_cats,
+                existing_subcategories=existing_subcats
+            )
+            log_api_usage(db, user_id, "analysis", "success")
+        except Exception as e:
+            err_msg = f"AI Analysis failed: {e}"
+            print(err_msg)
+            capture.ai_status = "failed"
+            capture.error_message = err_msg
+            db.commit()
+            log_api_usage(db, user_id, "analysis", "failed", str(e))
+            return
             
-        # 4. Compare changes and log category transitions
-        old_category = capture.category
-        old_sub_category = capture.sub_category
         new_category = analysis.get("category")
         new_sub_category = analysis.get("sub_category")
         
-        # Log category diff if it is an update and the category changes
-        if old_category is not None and (old_category != new_category or old_sub_category != new_sub_category):
-            cat_log = CategoryLog(
-                capture_id=capture.id,
-                old_category=old_category,
-                new_category=new_category,
-                old_sub_category=old_sub_category,
-                new_sub_category=new_sub_category,
-                changed_by="ai",
-                dismissed=False
-            )
-            db.add(cat_log)
-            
         # Update database capture
         capture.category = new_category
         capture.sub_category = new_sub_category
         capture.summary = analysis.get("summary")
         capture.tags = analysis.get("tags", [])
         capture.ai_status = "completed"
+        capture.error_message = None
         db.commit()
         
         # Update Qdrant payload with the new category
@@ -322,6 +335,7 @@ def process_capture_pipeline(capture_id: int, user_id: int):
             capture = db.query(Capture).filter(Capture.id == capture_id).first()
             if capture:
                 capture.ai_status = "failed"
+                capture.error_message = str(e)
                 db.commit()
         except Exception:
             pass
@@ -443,14 +457,28 @@ def reprocess_mock_captures():
                 
             try:
                 print(f"Re-processing capture {cap.id} using live Gemini API...")
-                vector = call_gemini_embedding(cap.raw_text, api_key)
+                
+                # 1. Embedding
+                try:
+                    vector = call_gemini_embedding(cap.raw_text, api_key)
+                    log_api_usage(db, cap.user_id, "embedding", "success")
+                except Exception as e_embed:
+                    log_api_usage(db, cap.user_id, "embedding", "failed", str(e_embed))
+                    raise e_embed
+                    
+                # 2. Analysis
                 existing_cats, existing_subcats = get_existing_taxonomy(db, cap.user_id)
-                analysis = call_gemini_analysis(
-                    cap.raw_text,
-                    api_key,
-                    existing_categories=existing_cats,
-                    existing_subcategories=existing_subcats
-                )
+                try:
+                    analysis = call_gemini_analysis(
+                        cap.raw_text,
+                        api_key,
+                        existing_categories=existing_cats,
+                        existing_subcategories=existing_subcats
+                    )
+                    log_api_usage(db, cap.user_id, "analysis", "success")
+                except Exception as e_anal:
+                    log_api_usage(db, cap.user_id, "analysis", "failed", str(e_anal))
+                    raise e_anal
                 
                 # Update Qdrant
                 qdrant_store.upsert_capture(
@@ -468,10 +496,14 @@ def reprocess_mock_captures():
                 cap.summary = analysis.get("summary")
                 cap.tags = analysis.get("tags", [])
                 cap.ai_status = "completed"
+                cap.error_message = None
                 db.commit()
                 print(f"Capture {cap.id} successfully re-processed: {cap.category}")
             except Exception as e:
                 print(f"Error re-processing capture {cap.id}: {e}")
+                cap.ai_status = "failed"
+                cap.error_message = f"AI Re-processing failed: {e}"
+                db.commit()
                 
         # Run a relinking pass for users whose captures were reprocessed
         user_ids = {cap.user_id for cap in mock_captures}

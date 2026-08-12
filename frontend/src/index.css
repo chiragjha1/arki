@@ -306,6 +306,10 @@ body {
   border-color: var(--border-focus);
 }
 
+.ai-failed-card {
+  border-left: 3px solid var(--accent-rose) !important;
+}
+
 .card-header-row {
   display: flex;
   justify-content: space-between;

@@ -1,6 +1,6 @@
 import os
 from datetime import datetime
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Boolean, ForeignKey, Float, JSON
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Boolean, ForeignKey, Float, JSON, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from dotenv import load_dotenv
 
@@ -43,6 +43,7 @@ class Capture(Base):
     summary = Column(Text, nullable=True)
     tags = Column(JSON, default=list) # JSON list of strings (e.g. ["ai", "learning"])
     ai_status = Column(String, default="pending") # pending, completed, failed
+    error_message = Column(Text, nullable=True) # AI processing error details
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     deleted_at = Column(DateTime, nullable=True) # soft delete timestamp
@@ -87,8 +88,29 @@ class UserSetting(Base):
     value = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+class ApiUsageLog(Base):
+    __tablename__ = "api_usage_logs"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    api_type = Column(String, nullable=False) # "embedding" or "analysis"
+    status = Column(String, nullable=False) # "success" or "failed"
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 def init_db():
     Base.metadata.create_all(bind=engine)
+    
+    # Self-healing schema migration: check and add error_message column to captures table if not present
+    try:
+        inspector = inspect(engine)
+        columns = [col["name"] for col in inspector.get_columns("captures")]
+        if "error_message" not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE captures ADD COLUMN error_message TEXT"))
+            print("Successfully migrated captures table: added error_message column.")
+    except Exception as e:
+        print(f"Migration warning/error adding error_message column: {e}")
 
 def get_db():
     db = SessionLocal()
