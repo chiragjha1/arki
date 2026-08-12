@@ -952,13 +952,13 @@ export default function App() {
                           <div className="card-text">{cap.raw_text}</div>
                           
                           {cap.ai_status === "failed" && (
-                            <div className="ai-error-banner" style={{ marginTop: "10px", padding: "10px 12px", background: "rgba(239, 68, 68, 0.06)", border: "1px solid rgba(239, 68, 68, 0.15)", borderRadius: "6px", color: "var(--text-primary)", fontSize: "0.8rem", display: "flex", flexDirection: "column", gap: "6px" }}>
-                              <div style={{ display: "flex", alignItems: "center", gap: "6px", fontWeight: "700", color: "var(--accent-rose)" }}>
+                            <div className="ai-error-banner" style={{ marginTop: "10px", padding: "10px 12px", background: "rgba(239, 68, 68, 0.04)", border: "1px solid rgba(239, 68, 68, 0.1)", borderRadius: "6px", color: "var(--text-primary)", fontSize: "0.8rem", display: "flex", flexDirection: "column", gap: "6px" }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: "6px", fontWeight: "600", color: "var(--accent-rose)" }}>
                                 <Icon name="info" style={{ color: "var(--accent-rose)", width: "14px", height: "14px" }} />
-                                Error Details
+                                API Limit Reached or Key Configuration Issue
                               </div>
-                              <div style={{ color: "var(--text-secondary)", fontSize: "0.75rem", fontFamily: "monospace", wordBreak: "break-all" }}>
-                                {cap.error_message || "Check settings or retry API processing."}
+                              <div style={{ color: "var(--text-secondary)", fontSize: "0.75rem" }}>
+                                Your Gemini API keys might have hit the rate limit (15 RPM) or are invalid. Please check your settings or try again.
                               </div>
                               <button 
                                 onClick={() => handleRetryProcessing(cap.id)} 
@@ -966,7 +966,7 @@ export default function App() {
                                 style={{ marginTop: "4px", background: "var(--accent-rose)", color: "white", border: "none", padding: "4px 10px", borderRadius: "4px", fontSize: "0.7rem", cursor: "pointer", fontWeight: "700", alignSelf: "flex-start", display: "flex", alignItems: "center", gap: "4px" }}
                               >
                                 <Icon name="refresh" style={{ width: "10px", height: "10px", fill: "white" }} />
-                                Retry Processing
+                                Retry AI Processing
                               </button>
                             </div>
                           )}
@@ -1267,16 +1267,16 @@ export default function App() {
               <h4 style={{ fontWeight: "600", marginBottom: "12px" }}>Gemini API Integration</h4>
               <form onSubmit={handleSaveSettings} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
                 <div className="form-group">
-                  <label>Gemini API Key</label>
+                  <label>Gemini API Keys</label>
                   <input
                     type="password"
-                    placeholder="AIzaSy..."
+                    placeholder="Key 1, Key 2, Key 3..."
                     className="form-input"
                     value={geminiApiKey}
                     onChange={(e) => setGeminiApiKey(e.target.value)}
                   />
                   <p style={{ fontSize: "0.7rem", color: "var(--text-muted)", marginTop: "4px" }}>
-                    Enter your Gemini API key to enable semantic analysis, summaries, and smart relational linking.
+                    Enter your Gemini API key. You can input multiple keys separated by commas (e.g. <code>key1, key2, key3</code>) to act as fallbacks if one gets rate-limited!
                   </p>
                 </div>
                 
@@ -1295,12 +1295,12 @@ export default function App() {
                   Gemini API Usage & Limits
                 </h4>
                 <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                  {/* Daily limits */}
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem" }}>
                     <span style={{ color: "var(--text-secondary)" }}>API Requests (Last 24h)</span>
                     <span style={{ fontWeight: "600" }}>{apiUsage.requests_today} / {apiUsage.daily_limit}</span>
                   </div>
                   
-                  {/* Progress Bar */}
                   <div style={{ width: "100%", height: "8px", background: "var(--bg-secondary)", borderRadius: "4px", overflow: "hidden" }}>
                     <div style={{
                       width: `${Math.min(100, (apiUsage.requests_today / apiUsage.daily_limit) * 100)}%`,
@@ -1310,15 +1310,35 @@ export default function App() {
                     }} />
                   </div>
                   
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.8rem", color: "var(--text-muted)", marginTop: "4px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.8rem", color: "var(--text-muted)", marginTop: "4px", marginBottom: "8px" }}>
                     <span>Remaining Daily Limit: {apiUsage.remaining_today} requests</span>
-                    <span>Free Tier Limit: 1,000 requests/day</span>
+                    <span>Free Tier Quota: 1,000 requests/day</span>
+                  </div>
+
+                  {/* RPM Rate limit */}
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem" }}>
+                    <span style={{ color: "var(--text-secondary)" }}>API Rate Limit (Requests / Minute)</span>
+                    <span style={{ fontWeight: "600" }}>{apiUsage.requests_this_minute} / {apiUsage.rpm_limit}</span>
+                  </div>
+                  
+                  <div style={{ width: "100%", height: "8px", background: "var(--bg-secondary)", borderRadius: "4px", overflow: "hidden" }}>
+                    <div style={{
+                      width: `${Math.min(100, (apiUsage.requests_this_minute / apiUsage.rpm_limit) * 100)}%`,
+                      height: "100%",
+                      background: apiUsage.requests_this_minute >= apiUsage.rpm_limit ? "var(--accent-rose)" : "var(--accent-emerald)",
+                      transition: "width 0.3s ease"
+                    }} />
+                  </div>
+                  
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.8rem", color: "var(--text-muted)", marginTop: "4px" }}>
+                    <span>RPM rate limits reset automatically every 60 seconds.</span>
+                    <span>Free Tier Quota: 15 RPM</span>
                   </div>
                   
                   {apiUsage.recent_errors && apiUsage.recent_errors.length > 0 && (
                     <div style={{ marginTop: "12px", borderTop: "1px solid var(--border-color)", paddingTop: "12px" }}>
                       <span style={{ fontSize: "0.75rem", color: "var(--accent-rose)", fontWeight: "700", display: "block", marginBottom: "6px" }}>
-                        RECENT API ERRORS
+                        RECENT KEY ROTATION FAILURES
                       </span>
                       <ul style={{ margin: "0", paddingLeft: "16px", fontSize: "0.75rem", color: "var(--text-muted)", display: "flex", flexDirection: "column", gap: "4px" }}>
                         {apiUsage.recent_errors.map((err, idx) => (

@@ -112,5 +112,7 @@ class ApiUsageResponse(BaseModel):
     requests_today: int
     daily_limit: int
     remaining_today: int
+    requests_this_minute: int
+    rpm_limit: int
     recent_errors: List[str]
 

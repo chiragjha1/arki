@@ -27,14 +27,57 @@ def log_api_usage(db: Session, user_id: int, api_type: str, status: str, error_m
 EMBEDDING_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:embedContent"
 GENERATE_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent"
 
-def get_user_api_key(db: Session, user_id: int) -> Optional[str]:
-    """Retrieves the Gemini API key from the user's settings, falling back to environment variable."""
-    # Check database settings first
+def get_user_api_keys(db: Session, user_id: int) -> List[str]:
+    """Retrieves all configured Gemini API keys from settings (comma-separated/newline-separated) and env."""
     setting = db.query(UserSetting).filter(UserSetting.user_id == user_id, UserSetting.key == "GEMINI_API_KEY").first()
+    keys = []
     if setting and setting.value:
-        return setting.value
-    # Fall back to env var
-    return os.getenv("GEMINI_API_KEY")
+        keys = [k.strip() for k in setting.value.replace("\n", ",").split(",") if k.strip()]
+    if not keys:
+        env_key = os.getenv("GEMINI_API_KEY")
+        if env_key:
+            keys = [k.strip() for k in env_key.replace("\n", ",").split(",") if k.strip()]
+    return keys
+
+def call_gemini_embedding_with_rotation(text: str, api_keys: List[str], db: Session, user_id: int) -> List[float]:
+    """Tries API keys sequentially for generating embedding vector."""
+    last_error = None
+    for i, key in enumerate(api_keys):
+        try:
+            vector = call_gemini_embedding(text, key)
+            log_api_usage(db, user_id, "embedding", "success")
+            return vector
+        except Exception as e:
+            last_error = e
+            # Mask API key in error message to avoid leak
+            masked_key = key[:6] + "..." if len(key) > 6 else "key"
+            log_api_usage(db, user_id, "embedding", "failed", f"Key #{i+1} ({masked_key}) failed: {e}")
+    if last_error:
+        raise last_error
+    raise Exception("No Gemini API keys configured.")
+
+def call_gemini_analysis_with_rotation(
+    text: str,
+    api_keys: List[str],
+    db: Session,
+    user_id: int,
+    existing_categories: Optional[List[str]] = None,
+    existing_subcategories: Optional[List[str]] = None
+) -> Dict[str, Any]:
+    """Tries API keys sequentially for generating analysis."""
+    last_error = None
+    for i, key in enumerate(api_keys):
+        try:
+            analysis = call_gemini_analysis(text, key, existing_categories, existing_subcategories)
+            log_api_usage(db, user_id, "analysis", "success")
+            return analysis
+        except Exception as e:
+            last_error = e
+            masked_key = key[:6] + "..." if len(key) > 6 else "key"
+            log_api_usage(db, user_id, "analysis", "failed", f"Key #{i+1} ({masked_key}) failed: {e}")
+    if last_error:
+        raise last_error
+    raise Exception("No Gemini API keys configured.")
 
 def generate_mock_analysis(raw_text: str) -> Dict[str, Any]:
     """Generates a high-quality fallback analysis if no Gemini API key is provided."""
@@ -219,9 +262,9 @@ def process_capture_pipeline(capture_id: int, user_id: int):
             print(f"Capture {capture_id} not found for user {user_id}")
             return
             
-        # Get user API key
-        api_key = get_user_api_key(db, user_id)
-        if not api_key:
+        # Get user API keys
+        api_keys = get_user_api_keys(db, user_id)
+        if not api_keys:
             err_msg = "No Gemini API key configured. Please add your Gemini API key in settings."
             capture.ai_status = "failed"
             capture.error_message = err_msg
@@ -232,15 +275,13 @@ def process_capture_pipeline(capture_id: int, user_id: int):
         # 2. Generate Vector and Upsert to Qdrant
         vector = None
         try:
-            vector = call_gemini_embedding(capture.raw_text, api_key)
-            log_api_usage(db, user_id, "embedding", "success")
+            vector = call_gemini_embedding_with_rotation(capture.raw_text, api_keys, db, user_id)
         except Exception as e:
             err_msg = f"AI Embedding failed: {e}"
             print(err_msg)
             capture.ai_status = "failed"
             capture.error_message = err_msg
             db.commit()
-            log_api_usage(db, user_id, "embedding", "failed", str(e))
             return
             
         # Save embedding in Qdrant
@@ -258,20 +299,20 @@ def process_capture_pipeline(capture_id: int, user_id: int):
         analysis = None
         try:
             existing_cats, existing_subcats = get_existing_taxonomy(db, user_id)
-            analysis = call_gemini_analysis(
+            analysis = call_gemini_analysis_with_rotation(
                 capture.raw_text,
-                api_key,
+                api_keys,
+                db,
+                user_id,
                 existing_categories=existing_cats,
                 existing_subcategories=existing_subcats
             )
-            log_api_usage(db, user_id, "analysis", "success")
         except Exception as e:
             err_msg = f"AI Analysis failed: {e}"
             print(err_msg)
             capture.ai_status = "failed"
             capture.error_message = err_msg
             db.commit()
-            log_api_usage(db, user_id, "analysis", "failed", str(e))
             return
             
         new_category = analysis.get("category")
@@ -457,8 +498,8 @@ def reprocess_mock_captures():
                 print(f"Capture {cap.id} was concurrently deleted. Skipping re-processing.")
                 continue
                 
-            api_key = get_user_api_key(db, live_cap.user_id)
-            if not api_key:
+            api_keys = get_user_api_keys(db, live_cap.user_id)
+            if not api_keys:
                 print(f"Skipping capture {cap.id}: No API key configured for user {live_cap.user_id}")
                 continue
                 
@@ -467,24 +508,22 @@ def reprocess_mock_captures():
                 
                 # 1. Embedding
                 try:
-                    vector = call_gemini_embedding(live_cap.raw_text, api_key)
-                    log_api_usage(db, live_cap.user_id, "embedding", "success")
+                    vector = call_gemini_embedding_with_rotation(live_cap.raw_text, api_keys, db, live_cap.user_id)
                 except Exception as e_embed:
-                    log_api_usage(db, live_cap.user_id, "embedding", "failed", str(e_embed))
                     raise e_embed
                     
                 # 2. Analysis
                 existing_cats, existing_subcats = get_existing_taxonomy(db, live_cap.user_id)
                 try:
-                    analysis = call_gemini_analysis(
+                    analysis = call_gemini_analysis_with_rotation(
                         live_cap.raw_text,
-                        api_key,
+                        api_keys,
+                        db,
+                        live_cap.user_id,
                         existing_categories=existing_cats,
                         existing_subcategories=existing_subcats
                     )
-                    log_api_usage(db, live_cap.user_id, "analysis", "success")
                 except Exception as e_anal:
-                    log_api_usage(db, live_cap.user_id, "analysis", "failed", str(e_anal))
                     raise e_anal
                 
                 # Update Qdrant
@@ -520,6 +559,8 @@ def reprocess_mock_captures():
                 except Exception as inner_e:
                     print(f"Failed to save error status for capture {cap.id}: {inner_e}")
                     db.rollback()
+            finally:
+                time.sleep(4.0)
                 
         # Run a relinking pass for users whose captures were reprocessed
         user_ids = {cap.user_id for cap in mock_captures}

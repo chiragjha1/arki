@@ -1,4 +1,5 @@
 import os
+import time
 from datetime import datetime, timedelta
 from typing import List, Optional
 from fastapi import FastAPI, Depends, HTTPException, status, BackgroundTasks, Query, Request
@@ -471,13 +472,13 @@ def trigger_full_relinking(
 
     # 1. On-the-fly heal/reprocess any mock captures for this user first
     # This ensures that if they save their API key and click scan, the notes are re-processed immediately
-    from .ai_pipeline import get_user_api_key, call_gemini_embedding, call_gemini_analysis, get_existing_taxonomy
+    from .ai_pipeline import get_user_api_keys, call_gemini_embedding_with_rotation, call_gemini_analysis_with_rotation, get_existing_taxonomy
     
     healed_count = 0
     errors = []
     
-    api_key = get_user_api_key(db, user_id)
-    if api_key:
+    api_keys = get_user_api_keys(db, user_id)
+    if api_keys:
         mock_captures = db.query(Capture).filter(
             Capture.user_id == user_id,
             Capture.summary.like("[Mock AI Summary]%")
@@ -492,11 +493,13 @@ def trigger_full_relinking(
                 continue
                 
             try:
-                vector = call_gemini_embedding(live_cap.raw_text, api_key)
+                vector = call_gemini_embedding_with_rotation(live_cap.raw_text, api_keys, db, user_id)
                 existing_cats, existing_subcats = get_existing_taxonomy(db, user_id)
-                analysis = call_gemini_analysis(
+                analysis = call_gemini_analysis_with_rotation(
                     live_cap.raw_text,
-                    api_key,
+                    api_keys,
+                    db,
+                    user_id,
                     existing_categories=existing_cats,
                     existing_subcategories=existing_subcats
                 )
@@ -524,6 +527,8 @@ def trigger_full_relinking(
                 err_msg = str(e)
                 print(f"Error healing capture {cap.id} during scan: {err_msg}")
                 errors.append(f"Note {cap.id} re-processing failed: {err_msg}")
+            finally:
+                time.sleep(4.0)
     else:
         errors.append("No Gemini API key found in your account settings.")
                 
@@ -590,6 +595,15 @@ def get_api_usage(
     daily_limit = 1000
     remaining_today = max(0, daily_limit - requests_today)
     
+    # Calculate requests in the last minute (RPM limit check)
+    one_minute_ago = datetime.utcnow() - timedelta(seconds=60)
+    requests_this_minute = db.query(ApiUsageLog).filter(
+        ApiUsageLog.user_id == current_user.id,
+        ApiUsageLog.created_at >= one_minute_ago
+    ).count()
+    
+    rpm_limit = 15
+    
     # Get recent errors
     recent_failures = db.query(ApiUsageLog).filter(
         ApiUsageLog.user_id == current_user.id,
@@ -602,6 +616,8 @@ def get_api_usage(
         "requests_today": requests_today,
         "daily_limit": daily_limit,
         "remaining_today": remaining_today,
+        "requests_this_minute": requests_this_minute,
+        "rpm_limit": rpm_limit,
         "recent_errors": recent_errors
     }
 
