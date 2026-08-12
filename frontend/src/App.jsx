@@ -191,6 +191,21 @@ export default function App() {
   const [showApiKeys, setShowApiKeys] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
+  // Space Sharing State
+  const [shareInfo, setShareInfo] = useState({ enabled: false, token: null });
+  const [sharedSpaceToken, setSharedSpaceToken] = useState(null);
+  const [sharedSpaceData, setSharedSpaceData] = useState(null);
+  const [sharedSearchQuery, setSharedSearchQuery] = useState("");
+  const [sharedSearchResults, setSharedSearchResults] = useState(null);
+  const [isSearchingShared, setIsSearchingShared] = useState(false);
+  const [connectedSpaces, setConnectedSpaces] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem("arki_connected_spaces") || "[]");
+    } catch (e) {
+      return [];
+    }
+  });
+
   // Expanded Categories
   const [expandedCategories, setExpandedCategories] = useState({});
 
@@ -344,6 +359,14 @@ export default function App() {
       } catch (usageErr) {
         console.error("Failed to load Gemini usage quota", usageErr);
       }
+
+      // Safely load space share status
+      try {
+        const shareData = await apiRequest("/api/shares/info");
+        setShareInfo(shareData);
+      } catch (shareErr) {
+        console.error("Failed to load share settings", shareErr);
+      }
     } catch (err) {
       console.error("Failed to load initial dashboard data", err);
     }
@@ -354,6 +377,53 @@ export default function App() {
       loadData();
     }
   }, [token]);
+
+  // Check URL share link query parameters on startup
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const shareToken = params.get("share");
+    if (shareToken) {
+      setSharedSpaceToken(shareToken);
+      setCurrentView("shared-viewer");
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, []);
+
+  // Fetch shared space info when token is loaded
+  useEffect(() => {
+    if (!sharedSpaceToken) return;
+    const fetchSharedData = async () => {
+      try {
+        const data = await apiRequest(`/api/shares/public/${sharedSpaceToken}`);
+        setSharedSpaceData(data);
+        setSharedSearchResults(null);
+        setSharedSearchQuery("");
+      } catch (err) {
+        alert("Failed to load shared space: " + err.message);
+        setSharedSpaceToken(null);
+        setCurrentView("capture");
+      }
+    };
+    fetchSharedData();
+  }, [sharedSpaceToken]);
+
+  // Handle semantic search within shared space
+  const handleSharedSearch = async (e) => {
+    if (e) e.preventDefault();
+    if (!sharedSearchQuery.trim()) {
+      setSharedSearchResults(null);
+      return;
+    }
+    setIsSearchingShared(true);
+    try {
+      const results = await apiRequest(`/api/shares/public/${sharedSpaceToken}/search?q=${encodeURIComponent(sharedSearchQuery)}`);
+      setSharedSearchResults(results);
+    } catch (err) {
+      alert("Semantic search failed: " + err.message);
+    } finally {
+      setIsSearchingShared(false);
+    }
+  };
 
   // Polling for pending captures
   useEffect(() => {
@@ -1262,6 +1332,145 @@ export default function App() {
           </div>
         )}
 
+        {/* View 6: Shared Space Viewer */}
+        {currentView === "shared-viewer" && sharedSpaceData && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <h3 className="feed-title" style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <Icon name="folder" style={{ color: "var(--primary)" }} />
+                Shared Space: {sharedSpaceData.owner_email}
+              </h3>
+              <button 
+                onClick={() => {
+                  setSharedSpaceToken(null);
+                  setSharedSpaceData(null);
+                  setCurrentView("settings");
+                }} 
+                className="card-action-btn"
+                style={{ padding: "4px 10px", fontSize: "0.8rem" }}
+              >
+                &larr; Back to Settings
+              </button>
+            </div>
+
+            {/* Mount button */}
+            {token && !connectedSpaces.includes(sharedSpaceToken) && (
+              <button 
+                onClick={() => {
+                  const newSpaces = [...connectedSpaces, sharedSpaceToken];
+                  setConnectedSpaces(newSpaces);
+                  localStorage.setItem("arki_connected_spaces", JSON.stringify(newSpaces));
+                  alert("Space mounted successfully! You can access it anytime from settings.");
+                }}
+                className="capture-btn"
+                style={{ padding: "8px 16px", background: "var(--accent-emerald)", color: "black", alignSelf: "flex-start", fontWeight: "700" }}
+              >
+                + Mount to My Connected Spaces
+              </button>
+            )}
+
+            {/* Semantic Search in Shared Space */}
+            <div className="glass-panel" style={{ padding: "20px" }}>
+              <h4 style={{ fontWeight: "600", marginBottom: "12px" }}>Semantic Query Search</h4>
+              <form onSubmit={handleSharedSearch} style={{ display: "flex", gap: "10px" }}>
+                <input 
+                  type="text" 
+                  className="form-input" 
+                  style={{ flex: "1" }}
+                  placeholder="Ask a question or search concepts in this shared space..."
+                  value={sharedSearchQuery}
+                  onChange={(e) => setSharedSearchQuery(e.target.value)}
+                />
+                <button type="submit" className="capture-btn" disabled={isSearchingShared}>
+                  {isSearchingShared ? "Searching..." : "Search"}
+                </button>
+              </form>
+
+              {sharedSearchResults !== null && (
+                <div style={{ marginTop: "16px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "10px", borderBottom: "1px solid var(--border-color)", paddingBottom: "6px" }}>
+                    <span style={{ fontSize: "0.8rem", fontWeight: "700" }}>Semantic Matches</span>
+                    <button 
+                      onClick={() => setSharedSearchResults(null)}
+                      style={{ background: "none", border: "none", color: "var(--accent-rose)", cursor: "pointer", fontSize: "0.75rem", fontWeight: "600" }}
+                    >
+                      Clear Search
+                    </button>
+                  </div>
+
+                  {sharedSearchResults.length === 0 ? (
+                    <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", fontStyle: "italic" }}>No semantic matches found.</p>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                      {sharedSearchResults.map(cap => (
+                        <div key={cap.id} className="capture-card glass-panel" style={{ padding: "12px", borderLeft: "3px solid var(--primary)" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem", color: "var(--text-muted)", marginBottom: "4px" }}>
+                            <span>{cap.category} &bull; {cap.sub_category}</span>
+                            <span style={{ color: "var(--accent-emerald)", fontWeight: "600" }}>Similarity: {Math.round(cap.score * 100)}%</span>
+                          </div>
+                          <div style={{ fontSize: "0.85rem", color: "var(--text-primary)" }}>{cap.raw_text}</div>
+                          {cap.summary && <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)", marginTop: "6px", fontStyle: "italic" }}>{cap.summary}</div>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* List Shared Notes & Taxonomy */}
+            <div className="glass-panel" style={{ padding: "20px" }}>
+              <h4 style={{ fontWeight: "600", marginBottom: "16px" }}>Taxonomy Folders</h4>
+              {sharedSpaceData.captures.length === 0 ? (
+                <p style={{ fontSize: "0.85rem", color: "var(--text-muted)", fontStyle: "italic" }}>This shared space is empty.</p>
+              ) : (
+                <div>
+                  {Object.entries(
+                    sharedSpaceData.captures.reduce((acc, cap) => {
+                      const cat = cap.category || "General";
+                      const sub = cap.sub_category || "Unsorted";
+                      if (!acc[cat]) acc[cat] = {};
+                      if (!acc[cat][sub]) acc[cat][sub] = [];
+                      acc[cat][sub].push(cap);
+                      return acc;
+                    }, {})
+                  ).map(([category, subCats]) => (
+                    <div key={category} style={{ marginBottom: "16px" }}>
+                      <div style={{ fontWeight: "700", fontSize: "0.95rem", color: "var(--primary)", display: "flex", alignItems: "center", gap: "6px", borderBottom: "1px solid var(--border-color)", paddingBottom: "4px" }}>
+                        <Icon name="folder" style={{ width: "14px", height: "14px" }} />
+                        {category}
+                      </div>
+                      
+                      <div style={{ paddingLeft: "16px", marginTop: "8px" }}>
+                        {Object.entries(subCats).map(([subCategory, notes]) => (
+                          <div key={subCategory} style={{ marginBottom: "10px" }}>
+                            <div style={{ fontWeight: "600", fontSize: "0.85rem", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "4px" }}>
+                              &bull; {subCategory}
+                            </div>
+                            
+                            <ul style={{ listStyleType: "circle", margin: "6px 0 6px 16px", paddingLeft: "6px", fontSize: "0.8rem", color: "var(--text-secondary)", display: "flex", flexDirection: "column", gap: "6px" }}>
+                              {notes.map(note => (
+                                <li key={note.id} style={{ lineHeight: "1.3" }}>
+                                  {note.raw_text}
+                                  {note.summary && (
+                                    <div style={{ fontSize: "0.7rem", color: "var(--text-muted)", fontStyle: "italic", marginTop: "2px" }}>
+                                      Summary: {note.summary}
+                                    </div>
+                                  )}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* View 5: Settings, Statistics, and Trash */}
         {currentView === "settings" && (
           <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
@@ -1354,6 +1563,152 @@ export default function App() {
                 </button>
                 {saveSuccess && <span style={{ color: "var(--accent-emerald)", fontSize: "0.8rem", textAlign: "right" }}>API key updated successfully.</span>}
               </form>
+            </div>
+
+            {/* Space Sharing Config */}
+            <div className="glass-panel" style={{ padding: "20px" }}>
+              <h4 style={{ fontWeight: "600", marginBottom: "12px", display: "flex", alignItems: "center", gap: "6px" }}>
+                <Icon name="graph" style={{ color: "var(--primary)", width: "16px", height: "16px" }} />
+                Share My Taxonomy & Space
+              </h4>
+              <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                <p style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
+                  Toggle sharing to generate a public link. Other users will be able to view your taxonomy structure and perform semantic searches on your notes.
+                </p>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: "6px" }}>
+                  <span style={{ fontSize: "0.85rem", fontWeight: "600" }}>Public Sharing Status</span>
+                  <button 
+                    onClick={async () => {
+                      try {
+                        const updated = await apiRequest("/api/shares/toggle", "POST");
+                        setShareInfo(updated);
+                        alert(`Sharing is now ${updated.enabled ? "enabled" : "disabled"}.`);
+                      } catch (e) {
+                        alert("Failed to toggle sharing: " + e.message);
+                      }
+                    }}
+                    className="capture-btn"
+                    style={{
+                      padding: "6px 12px",
+                      fontSize: "0.8rem",
+                      background: shareInfo?.enabled ? "var(--accent-rose)" : "var(--primary)",
+                      color: shareInfo?.enabled ? "white" : "black"
+                    }}
+                  >
+                    {shareInfo?.enabled ? "Disable Sharing" : "Enable Sharing"}
+                  </button>
+                </div>
+                
+                {shareInfo?.enabled && shareInfo?.token && (
+                  <div style={{ marginTop: "12px", background: "var(--bg-secondary)", padding: "10px", borderRadius: "6px", border: "1px solid var(--border-color)" }}>
+                    <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginBottom: "4px" }}>Your Shared Space Link:</div>
+                    <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                      <input 
+                        type="text" 
+                        readOnly 
+                        className="form-input" 
+                        style={{ flex: "1", fontSize: "0.75rem", background: "rgba(0,0,0,0.15)", fontFamily: "monospace" }}
+                        value={`${window.location.origin}/?share=${shareInfo.token}`}
+                      />
+                      <button 
+                        onClick={() => {
+                          navigator.clipboard.writeText(`${window.location.origin}/?share=${shareInfo.token}`);
+                          alert("Share link copied to clipboard!");
+                        }}
+                        className="card-action-btn"
+                        style={{ padding: "6px 10px", fontSize: "0.75rem" }}
+                      >
+                        Copy
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Connected Shared Spaces Panel */}
+            <div className="glass-panel" style={{ padding: "20px" }}>
+              <h4 style={{ fontWeight: "600", marginBottom: "12px" }}>Connected Friends' Spaces</h4>
+              <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <input 
+                    type="text" 
+                    placeholder="Enter Share Token (UUID) or share link..."
+                    className="form-input"
+                    id="connect-space-input"
+                    style={{ flex: "1" }}
+                  />
+                  <button 
+                    onClick={() => {
+                      const input = document.getElementById("connect-space-input");
+                      let tokenVal = input.value.trim();
+                      if (!tokenVal) return;
+                      if (tokenVal.includes("share=")) {
+                        try {
+                          tokenVal = new URL(tokenVal).searchParams.get("share");
+                        } catch (e) {
+                          const match = tokenVal.match(/[?&]share=([^&]+)/);
+                          if (match) tokenVal = match[1];
+                        }
+                      }
+                      if (!connectedSpaces.includes(tokenVal)) {
+                        const newSpaces = [...connectedSpaces, tokenVal];
+                        setConnectedSpaces(newSpaces);
+                        localStorage.setItem("arki_connected_spaces", JSON.stringify(newSpaces));
+                        alert("Connected space added successfully!");
+                        input.value = "";
+                      } else {
+                        alert("Space already connected.");
+                      }
+                    }}
+                    className="capture-btn"
+                    style={{ padding: "6px 12px" }}
+                  >
+                    Connect
+                  </button>
+                </div>
+
+                {connectedSpaces.length === 0 ? (
+                  <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", fontStyle: "italic" }}>No connected spaces yet.</p>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "4px" }}>
+                    {connectedSpaces.map(spToken => (
+                      <div key={spToken} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "var(--bg-secondary)", padding: "8px 12px", borderRadius: "6px", border: "1px solid var(--border-color)" }}>
+                        <span style={{ fontSize: "0.75rem", fontFamily: "monospace", color: "var(--text-secondary)", textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap", flex: "1" }}>
+                          Token: {spToken.slice(0, 8)}...
+                        </span>
+                        
+                        <div style={{ display: "flex", gap: "6px" }}>
+                          <button 
+                            type="button"
+                            onClick={() => {
+                              setSharedSpaceToken(spToken);
+                              setCurrentView("shared-viewer");
+                            }}
+                            className="card-action-btn"
+                            style={{ padding: "2px 8px", fontSize: "0.7rem", color: "var(--primary)" }}
+                          >
+                            Browse
+                          </button>
+                          
+                          <button 
+                            type="button"
+                            onClick={() => {
+                              const filtered = connectedSpaces.filter(t => t !== spToken);
+                              setConnectedSpaces(filtered);
+                              localStorage.setItem("arki_connected_spaces", JSON.stringify(filtered));
+                            }}
+                            className="card-action-btn"
+                            style={{ padding: "2px 8px", fontSize: "0.7rem", color: "var(--accent-rose)", borderColor: "var(--accent-rose)" }}
+                          >
+                            Disconnect
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* API Usage logs panel */}

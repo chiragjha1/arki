@@ -622,6 +622,129 @@ def get_api_usage(
     }
 
 # ==========================================
+# TAXONOMY & NOTE SHARING ENDPOINTS
+# ==========================================
+
+@app.get("/api/shares/info")
+def get_share_info(current_user: User = Depends(auth.get_current_user), db: Session = Depends(get_db)):
+    enabled_setting = db.query(UserSetting).filter(UserSetting.user_id == current_user.id, UserSetting.key == "SHARE_ENABLED").first()
+    token_setting = db.query(UserSetting).filter(UserSetting.user_id == current_user.id, UserSetting.key == "SHARE_TOKEN").first()
+    
+    enabled = (enabled_setting.value == "true") if enabled_setting else False
+    token = token_setting.value if token_setting else None
+    
+    return {"enabled": enabled, "token": token}
+
+@app.post("/api/shares/toggle")
+def toggle_share(current_user: User = Depends(auth.get_current_user), db: Session = Depends(get_db)):
+    import uuid
+    enabled_setting = db.query(UserSetting).filter(UserSetting.user_id == current_user.id, UserSetting.key == "SHARE_ENABLED").first()
+    token_setting = db.query(UserSetting).filter(UserSetting.user_id == current_user.id, UserSetting.key == "SHARE_TOKEN").first()
+    
+    if not enabled_setting:
+        enabled_setting = UserSetting(user_id=current_user.id, key="SHARE_ENABLED", value="false")
+        db.add(enabled_setting)
+    
+    new_val = "true" if enabled_setting.value != "true" else "false"
+    enabled_setting.value = new_val
+    
+    if new_val == "true" and not token_setting:
+        token_setting = UserSetting(user_id=current_user.id, key="SHARE_TOKEN", value=str(uuid.uuid4()))
+        db.add(token_setting)
+        
+    db.commit()
+    return {"enabled": new_val == "true", "token": token_setting.value if token_setting else None}
+
+@app.get("/api/shares/public/{token}")
+def get_public_share(token: str, db: Session = Depends(get_db)):
+    token_setting = db.query(UserSetting).filter(UserSetting.key == "SHARE_TOKEN", UserSetting.value == token).first()
+    if not token_setting:
+        raise HTTPException(status_code=404, detail="Shared space not found or link has expired.")
+        
+    enabled = db.query(UserSetting).filter(UserSetting.user_id == token_setting.user_id, UserSetting.key == "SHARE_ENABLED").first()
+    if not enabled or enabled.value != "true":
+        raise HTTPException(status_code=403, detail="This space is no longer public.")
+        
+    owner = db.query(User).filter(User.id == token_setting.user_id).first()
+    if not owner:
+        raise HTTPException(status_code=404, detail="Owner not found")
+        
+    captures = db.query(Capture).filter(
+        Capture.user_id == owner.id,
+        Capture.deleted_at.is_(None)
+    ).all()
+    
+    email_parts = owner.email.split("@")
+    masked_email = email_parts[0][0] + "***@" + email_parts[1] if len(email_parts[0]) > 1 else owner.email
+    
+    return {
+        "owner_email": masked_email,
+        "captures": [
+            {
+                "id": c.id,
+                "raw_text": c.raw_text,
+                "category": c.category,
+                "sub_category": c.sub_category,
+                "summary": c.summary,
+                "tags": c.tags,
+                "source": c.source,
+                "created_at": c.created_at
+            }
+            for c in captures
+        ]
+    }
+
+@app.get("/api/shares/public/{token}/search")
+def search_public_share(token: str, q: str, db: Session = Depends(get_db)):
+    token_setting = db.query(UserSetting).filter(UserSetting.key == "SHARE_TOKEN", UserSetting.value == token).first()
+    if not token_setting:
+        raise HTTPException(status_code=404, detail="Shared space not found.")
+        
+    enabled = db.query(UserSetting).filter(UserSetting.user_id == token_setting.user_id, UserSetting.key == "SHARE_ENABLED").first()
+    if not enabled or enabled.value != "true":
+        raise HTTPException(status_code=403, detail="This space is private.")
+        
+    owner_id = token_setting.user_id
+    from .ai_pipeline import get_user_api_keys, call_gemini_embedding_with_rotation
+    
+    api_keys = get_user_api_keys(db, owner_id)
+    if not api_keys:
+        raise HTTPException(status_code=400, detail="Shared space API keys are not configured.")
+        
+    try:
+        query_vector = call_gemini_embedding_with_rotation(q, api_keys, db, owner_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate search embedding: {e}")
+        
+    results = qdrant_store.search_captures(user_id=owner_id, query_vector=query_vector, limit=10)
+    
+    matched_ids = [res["capture_id"] for res in results]
+    captures = db.query(Capture).filter(
+        Capture.id.in_(matched_ids),
+        Capture.user_id == owner_id,
+        Capture.deleted_at.is_(None)
+    ).all()
+    
+    score_map = {res["capture_id"]: res["score"] for res in results}
+    
+    matched_notes = []
+    for c in captures:
+        matched_notes.append({
+            "id": c.id,
+            "raw_text": c.raw_text,
+            "category": c.category,
+            "sub_category": c.sub_category,
+            "summary": c.summary,
+            "tags": c.tags,
+            "source": c.source,
+            "created_at": c.created_at,
+            "score": score_map.get(c.id, 0.0)
+        })
+        
+    matched_notes.sort(key=lambda x: x["score"], reverse=True)
+    return matched_notes
+
+# ==========================================
 # RETENTION / RESURFACING (FSRS & ON THIS DAY)
 # ==========================================
 
