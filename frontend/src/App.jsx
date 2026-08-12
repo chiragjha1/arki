@@ -188,6 +188,7 @@ export default function App() {
 
   // Settings State
   const [geminiApiKey, setGeminiApiKey] = useState("");
+  const [showApiKeys, setShowApiKeys] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
   // Expanded Categories
@@ -1268,13 +1269,32 @@ export default function App() {
               <form onSubmit={handleSaveSettings} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
                 <div className="form-group">
                   <label>Gemini API Keys</label>
-                  <input
-                    type="password"
-                    placeholder="Key 1, Key 2, Key 3..."
-                    className="form-input"
-                    value={geminiApiKey}
-                    onChange={(e) => setGeminiApiKey(e.target.value)}
-                  />
+                  <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+                    <input
+                      type={showApiKeys ? "text" : "password"}
+                      placeholder="Key 1, Key 2, Key 3..."
+                      className="form-input"
+                      style={{ paddingRight: "50px", width: "100%" }}
+                      value={geminiApiKey}
+                      onChange={(e) => setGeminiApiKey(e.target.value)}
+                    />
+                    <button 
+                      type="button"
+                      onClick={() => setShowApiKeys(!showApiKeys)}
+                      style={{
+                        position: "absolute",
+                        right: "10px",
+                        background: "none",
+                        border: "none",
+                        cursor: "pointer",
+                        color: "var(--text-secondary)",
+                        fontSize: "0.75rem",
+                        fontWeight: "600"
+                      }}
+                    >
+                      {showApiKeys ? "Hide" : "Show"}
+                    </button>
+                  </div>
                   <p style={{ fontSize: "0.7rem", color: "var(--text-muted)", marginTop: "4px" }}>
                     Enter your Gemini API key. You can input multiple keys separated by commas (e.g. <code>key1, key2, key3</code>) to act as fallbacks if one gets rate-limited!
                   </p>
@@ -1335,18 +1355,6 @@ export default function App() {
                     <span>Free Tier Quota: 15 RPM</span>
                   </div>
                   
-                  {apiUsage.recent_errors && apiUsage.recent_errors.length > 0 && (
-                    <div style={{ marginTop: "12px", borderTop: "1px solid var(--border-color)", paddingTop: "12px" }}>
-                      <span style={{ fontSize: "0.75rem", color: "var(--accent-rose)", fontWeight: "700", display: "block", marginBottom: "6px" }}>
-                        RECENT KEY ROTATION FAILURES
-                      </span>
-                      <ul style={{ margin: "0", paddingLeft: "16px", fontSize: "0.75rem", color: "var(--text-muted)", display: "flex", flexDirection: "column", gap: "4px" }}>
-                        {apiUsage.recent_errors.map((err, idx) => (
-                          <li key={idx} style={{ wordBreak: "break-all" }}>{err}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
                 </div>
               </div>
             )}
