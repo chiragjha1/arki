@@ -651,9 +651,141 @@ def toggle_share(current_user: User = Depends(auth.get_current_user), db: Sessio
     if new_val == "true" and not token_setting:
         token_setting = UserSetting(user_id=current_user.id, key="SHARE_TOKEN", value=str(uuid.uuid4()))
         db.add(token_setting)
-        
     db.commit()
     return {"enabled": new_val == "true", "token": token_setting.value if token_setting else None}
+
+@app.get("/api/shares/connections")
+def get_space_connections(
+    current_user: User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    from .database import SpaceConnection
+    # Find current user's share token
+    token_setting = db.query(UserSetting).filter(
+        UserSetting.user_id == current_user.id,
+        UserSetting.key == "SHARE_TOKEN"
+    ).first()
+    
+    if not token_setting:
+        return []
+        
+    # Get connections
+    conns = db.query(SpaceConnection).filter(
+        SpaceConnection.shared_token == token_setting.value
+    ).all()
+    
+    # Map to list with subscriber email/details
+    result = []
+    for c in conns:
+        sub_user = db.query(User).filter(User.id == c.user_id).first()
+        if sub_user:
+            result.append({
+                "email": sub_user.email,
+                "connected_at": c.connected_at
+            })
+    return result
+
+@app.post("/api/shares/connect")
+def connect_space(
+    payload: dict,
+    current_user: User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    from .database import SpaceConnection
+    token = payload.get("token")
+    if not token:
+        raise HTTPException(status_code=400, detail="Token is required")
+        
+    # Verify token exists and belongs to a user
+    token_setting = db.query(UserSetting).filter(
+        UserSetting.key == "SHARE_TOKEN",
+        UserSetting.value == token
+    ).first()
+    
+    if not token_setting:
+        raise HTTPException(status_code=404, detail="Shared space not found")
+        
+    # Verify sharing is enabled for that user
+    enabled_setting = db.query(UserSetting).filter(
+        UserSetting.user_id == token_setting.user_id,
+        UserSetting.key == "SHARE_ENABLED"
+    ).first()
+    
+    if not enabled_setting or enabled_setting.value != "true":
+        raise HTTPException(status_code=403, detail="This space is not publicly shared")
+        
+    # Prevent self-connecting
+    if token_setting.user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="You cannot connect to your own space")
+        
+    # Check if connection already exists
+    existing = db.query(SpaceConnection).filter(
+        SpaceConnection.user_id == current_user.id,
+        SpaceConnection.shared_token == token
+    ).first()
+    
+    if not existing:
+        new_conn = SpaceConnection(user_id=current_user.id, shared_token=token)
+        db.add(new_conn)
+        db.commit()
+        
+    # Fetch owner info for the subscriber's reference
+    owner = db.query(User).filter(User.id == token_setting.user_id).first()
+    return {"status": "connected", "owner_email": owner.email if owner else "Unknown"}
+
+@app.post("/api/shares/disconnect")
+def disconnect_space(
+    payload: dict,
+    current_user: User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    from .database import SpaceConnection
+    token = payload.get("token")
+    if not token:
+        raise HTTPException(status_code=400, detail="Token is required")
+        
+    existing = db.query(SpaceConnection).filter(
+        SpaceConnection.user_id == current_user.id,
+        SpaceConnection.shared_token == token
+    ).first()
+    
+    if existing:
+        db.delete(existing)
+        db.commit()
+        
+    return {"status": "disconnected"}
+
+@app.get("/api/shares/connected")
+def get_connected_spaces(
+    current_user: User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    from .database import SpaceConnection
+    conns = db.query(SpaceConnection).filter(SpaceConnection.user_id == current_user.id).all()
+    
+    result = []
+    for c in conns:
+        # Find owner of this token
+        token_setting = db.query(UserSetting).filter(
+            UserSetting.key == "SHARE_TOKEN",
+            UserSetting.value == c.shared_token
+        ).first()
+        
+        owner_email = "Unknown User"
+        if token_setting:
+            owner = db.query(User).filter(User.id == token_setting.user_id).first()
+            if owner:
+                owner_email = owner.email
+                
+        result.append({
+            "token": c.shared_token,
+            "owner_email": owner_email,
+            "connected_at": c.connected_at
+        })
+        
+    return result
+
+
 
 @app.get("/api/shares/public/{token}")
 def get_public_share(token: str, db: Session = Depends(get_db)):

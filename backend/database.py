@@ -88,6 +88,14 @@ class UserSetting(Base):
     value = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+class SpaceConnection(Base):
+    __tablename__ = "space_connections"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False) # The subscriber user ID
+    shared_token = Column(String, nullable=False, index=True) # Token of the shared space they connected to
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 class ApiUsageLog(Base):
     __tablename__ = "api_usage_logs"
     

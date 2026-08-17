@@ -198,13 +198,8 @@ export default function App() {
   const [sharedSearchQuery, setSharedSearchQuery] = useState("");
   const [sharedSearchResults, setSharedSearchResults] = useState(null);
   const [isSearchingShared, setIsSearchingShared] = useState(false);
-  const [connectedSpaces, setConnectedSpaces] = useState(() => {
-    try {
-      return JSON.parse(localStorage.getItem("arki_connected_spaces") || "[]");
-    } catch (e) {
-      return [];
-    }
-  });
+  const [connectedSpaces, setConnectedSpaces] = useState([]);
+  const [spaceConnections, setSpaceConnections] = useState([]);
 
   // Expanded Categories
   const [expandedCategories, setExpandedCategories] = useState({});
@@ -366,6 +361,22 @@ export default function App() {
         setShareInfo(shareData);
       } catch (shareErr) {
         console.error("Failed to load share settings", shareErr);
+      }
+
+      // Load connected spaces
+      try {
+        const connectedData = await apiRequest("/api/shares/connected");
+        setConnectedSpaces(connectedData);
+      } catch (connErr) {
+        console.error("Failed to load connected spaces", connErr);
+      }
+
+      // Load who is connected to my space
+      try {
+        const connectionsData = await apiRequest("/api/shares/connections");
+        setSpaceConnections(connectionsData);
+      } catch (connsErr) {
+        console.error("Failed to load audience connections", connsErr);
       }
     } catch (err) {
       console.error("Failed to load initial dashboard data", err);
@@ -1354,13 +1365,16 @@ export default function App() {
             </div>
 
             {/* Mount button */}
-            {token && !connectedSpaces.includes(sharedSpaceToken) && (
+            {token && !connectedSpaces.some(s => s.token === sharedSpaceToken) && (
               <button 
-                onClick={() => {
-                  const newSpaces = [...connectedSpaces, sharedSpaceToken];
-                  setConnectedSpaces(newSpaces);
-                  localStorage.setItem("arki_connected_spaces", JSON.stringify(newSpaces));
-                  alert("Space mounted successfully! You can access it anytime from settings.");
+                onClick={async () => {
+                  try {
+                    await apiRequest("/api/shares/connect", "POST", { token: sharedSpaceToken });
+                    loadData();
+                    alert("Space mounted successfully! You can access it anytime from settings.");
+                  } catch (e) {
+                    alert("Failed to connect: " + e.message);
+                  }
                 }}
                 className="capture-btn"
                 style={{ padding: "8px 16px", background: "var(--accent-emerald)", color: "black", alignSelf: "flex-start", fontWeight: "700" }}
@@ -1600,28 +1614,52 @@ export default function App() {
                 </div>
                 
                 {shareInfo?.enabled && shareInfo?.token && (
-                  <div style={{ marginTop: "12px", background: "var(--bg-secondary)", padding: "10px", borderRadius: "6px", border: "1px solid var(--border-color)" }}>
-                    <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginBottom: "4px" }}>Your Shared Space Link:</div>
-                    <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
-                      <input 
-                        type="text" 
-                        readOnly 
-                        className="form-input" 
-                        style={{ flex: "1", fontSize: "0.75rem", background: "rgba(0,0,0,0.15)", fontFamily: "monospace" }}
-                        value={`${window.location.origin}/?share=${shareInfo.token}`}
-                      />
-                      <button 
-                        onClick={() => {
-                          navigator.clipboard.writeText(`${window.location.origin}/?share=${shareInfo.token}`);
-                          alert("Share link copied to clipboard!");
-                        }}
-                        className="card-action-btn"
-                        style={{ padding: "6px 10px", fontSize: "0.75rem" }}
-                      >
-                        Copy
-                      </button>
+                  <>
+                    <div style={{ marginTop: "12px", background: "var(--bg-secondary)", padding: "10px", borderRadius: "6px", border: "1px solid var(--border-color)" }}>
+                      <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginBottom: "4px" }}>Your Shared Space Link:</div>
+                      <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                        <input 
+                          type="text" 
+                          readOnly 
+                          className="form-input" 
+                          style={{ flex: "1", fontSize: "0.75rem", background: "rgba(0,0,0,0.15)", fontFamily: "monospace" }}
+                          value={`${window.location.origin}/?share=${shareInfo.token}`}
+                        />
+                        <button 
+                          onClick={() => {
+                            navigator.clipboard.writeText(`${window.location.origin}/?share=${shareInfo.token}`);
+                            alert("Share link copied to clipboard!");
+                          }}
+                          className="card-action-btn"
+                          style={{ padding: "6px 10px", fontSize: "0.75rem" }}
+                        >
+                          Copy
+                        </button>
+                      </div>
                     </div>
-                  </div>
+
+                    <div style={{ marginTop: "16px", borderTop: "1px solid var(--border-color)", paddingTop: "12px" }}>
+                      <span style={{ fontSize: "0.75rem", color: "var(--primary)", fontWeight: "700", display: "block", marginBottom: "8px" }}>
+                        ACTIVE SUBSCRIBERS / CONNECTED AUDIENCE
+                      </span>
+                      {spaceConnections.length === 0 ? (
+                        <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", fontStyle: "italic", margin: "0" }}>
+                          No users have connected to your space yet. Share your link to let friends connect!
+                        </p>
+                      ) : (
+                        <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                          {spaceConnections.map((conn, idx) => (
+                            <div key={idx} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "var(--bg-secondary)", padding: "6px 10px", borderRadius: "6px", fontSize: "0.8rem", border: "1px solid var(--border-color)" }}>
+                              <span style={{ fontWeight: "600", color: "var(--text-primary)" }}>{conn.email}</span>
+                              <span style={{ color: "var(--text-muted)", fontSize: "0.7rem" }}>
+                                Connected {new Date(conn.connected_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </>
                 )}
               </div>
             </div>
@@ -1639,7 +1677,7 @@ export default function App() {
                     style={{ flex: "1" }}
                   />
                   <button 
-                    onClick={() => {
+                    onClick={async () => {
                       const input = document.getElementById("connect-space-input");
                       let tokenVal = input.value.trim();
                       if (!tokenVal) return;
@@ -1651,14 +1689,13 @@ export default function App() {
                           if (match) tokenVal = match[1];
                         }
                       }
-                      if (!connectedSpaces.includes(tokenVal)) {
-                        const newSpaces = [...connectedSpaces, tokenVal];
-                        setConnectedSpaces(newSpaces);
-                        localStorage.setItem("arki_connected_spaces", JSON.stringify(newSpaces));
-                        alert("Connected space added successfully!");
+                      try {
+                        await apiRequest("/api/shares/connect", "POST", { token: tokenVal });
                         input.value = "";
-                      } else {
-                        alert("Space already connected.");
+                        loadData();
+                        alert("Connected space added successfully!");
+                      } catch (e) {
+                        alert("Failed to connect: " + e.message);
                       }
                     }}
                     className="capture-btn"
@@ -1672,17 +1709,17 @@ export default function App() {
                   <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", fontStyle: "italic" }}>No connected spaces yet.</p>
                 ) : (
                   <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "4px" }}>
-                    {connectedSpaces.map(spToken => (
-                      <div key={spToken} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "var(--bg-secondary)", padding: "8px 12px", borderRadius: "6px", border: "1px solid var(--border-color)" }}>
-                        <span style={{ fontSize: "0.75rem", fontFamily: "monospace", color: "var(--text-secondary)", textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap", flex: "1" }}>
-                          Token: {spToken.slice(0, 8)}...
+                    {connectedSpaces.map(sp => (
+                      <div key={sp.token} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "var(--bg-secondary)", padding: "8px 12px", borderRadius: "6px", border: "1px solid var(--border-color)" }}>
+                        <span style={{ fontSize: "0.8rem", fontWeight: "600", color: "var(--text-primary)", textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap", flex: "1" }}>
+                          {sp.owner_email}
                         </span>
                         
                         <div style={{ display: "flex", gap: "6px" }}>
                           <button 
                             type="button"
                             onClick={() => {
-                              setSharedSpaceToken(spToken);
+                              setSharedSpaceToken(sp.token);
                               setCurrentView("shared-viewer");
                             }}
                             className="card-action-btn"
@@ -1693,10 +1730,14 @@ export default function App() {
                           
                           <button 
                             type="button"
-                            onClick={() => {
-                              const filtered = connectedSpaces.filter(t => t !== spToken);
-                              setConnectedSpaces(filtered);
-                              localStorage.setItem("arki_connected_spaces", JSON.stringify(filtered));
+                            onClick={async () => {
+                              try {
+                                await apiRequest("/api/shares/disconnect", "POST", { token: sp.token });
+                                loadData();
+                                alert("Disconnected successfully.");
+                              } catch (e) {
+                                alert("Failed to disconnect: " + e.message);
+                              }
                             }}
                             className="card-action-btn"
                             style={{ padding: "2px 8px", fontSize: "0.7rem", color: "var(--accent-rose)", borderColor: "var(--accent-rose)" }}
